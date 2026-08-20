@@ -4,3 +4,6 @@ utterly retarded.
 
 so I wanted to make an alternative windows troubleshooter
 that will do what the old troubleshooters did and help fix issues that for whatever reason windows has decided not to let its endusers to to keep their computer working.... its absurd imho.
+
+Download the zip and run from there. 
+https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip

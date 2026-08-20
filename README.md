@@ -1,4 +1,4 @@
-I was really upset with microsoft putting the troubleshooters online especially network troubleshooting tools ... which is pretty retarded to put online 
+I was really upset with microsoft putting the windows system troubleshooters only online especially network troubleshooting tools ... which is pretty retarded to put online 
 to be clear that is no longer running locally on your computer when it has no internet access.. so the internet troubleshooting tool is only avaialable on the internet
 utterly retarded.
 

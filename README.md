@@ -128,22 +128,7 @@ CVTRES to collide over.
    automatically, and most repair actions (service restarts, Winsock/TCP-IP
    reset, SFC/DISM) need it. Windows will show the standard UAC prompt.
 
-### Validation note
-
-I don't have a Windows/MSVC environment available where I generated this,
-so I cross-compiled every source file with MinGW-w64 (a real, independent
-C/C++ toolchain targeting Windows) as a stand-in check: all eight source
-files compile cleanly with zero warnings under `-Wall -Wextra`, and the
-whole project links into a real PE32+ Windows executable with no missing
-symbols. That's a genuinely useful check for *code* bugs (typos, wrong
-signatures, missing includes/libs, unresolved references) — but it's a
-different linker from a different toolchain, so it can't catch MSVC-specific
-linker/manifest-tool behavior. That's exactly what happened here: the
-`LNK1327` and then `CVT1100` failures were both in that category, and only
-showed up on a real VS2026 build. If VS2026 reports anything else, paste the
-error text back and I'll fix it immediately.
-
-## Using it
+ ## Using it
 
 **GUI mode** (default — just run the EXE): a full diagnostic runs
 automatically on launch. Tabs:
@@ -209,17 +194,6 @@ WinDiagPro.exe /cli /full /html           Save as .html instead of .txt
 ```
 (CLI mode currently always saves `.txt`, or `.html` with `/html` — `.md`/`.json`
 export is GUI-only for now; shout if you want CLI flags for those too.)
-
-## Multi-NIC topology diagnosis and the Topology tab
-
-This grew out of a real multi-NIC troubleshooting case: one adapter with a
-working internet connection, a second adapter used for a direct cable link
-to another PC, and that second adapter intermittently losing its DHCP lease
-and ending up with a link-local (APIPA, `169.254.x.x`) address while still
-carrying a stale routable default gateway - an invalid combination
-(RFC 3927 says `169.254.0.0/16` must never carry a usable gateway) that
-causes exactly the "some things load, some don't" symptom that's miserable
-to chase through `ipconfig` output alone.
 
 **Adapters are now classified by role**, not just judged by "does it have an
 IP":
@@ -328,25 +302,4 @@ way:
   isn't enough for that specific failure mode.
 
 
-## Ideas for next steps (not yet built)
-
-- An **interactive** version of the Topology tab - drag adapters/gateway
-  boxes, draw/edit connections by hand, and compare "what Windows is
-  actually doing" against "what you want it to do" side by side. The
-  current Topology tab is deliberately read-only/auto-laid-out; a real
-  editor is a substantially bigger UI undertaking (hit-testing for wire
-  endpoints, an undo stack, validating edits against what Windows will
-  actually accept) and worth scoping as its own project phase.
-- Raw DHCP DISCOVER/OFFER probing - see the dedicated section above on why
-  this was deliberately deferred rather than rushed.
-- CLI flags for `.md`/`.json` export (`/md`, `/json`).
-- Wire the Repair tab's "requires reboot" actions to offer an immediate
-  restart prompt.
-- A small offline knowledge-base file (JSON/INI shipped alongside the EXE)
-  so the rules engine's diagnoses — and the QuickActions mapping — can be
-  edited/extended without a rebuild.
-- A portable/no-install build profile (static CRT) for running straight off
-  a USB stick in WinRE, where the VC++ redistributable may not be present.
-  Happy to add `<MultiThreaded>` (static) runtime linking if you want that —
-  just say the word.
 

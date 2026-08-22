@@ -26,6 +26,7 @@
     <ClInclude Include="src\ReportGenerator.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\QuickActions.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\TopologyView.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\HelpContent.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\MainWindow.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\resource.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>

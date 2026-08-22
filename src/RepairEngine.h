@@ -49,4 +49,17 @@ public:
     // reversible instead of a one-way trip. Returns the saved file path, or
     // empty on failure.
     static std::wstring ExportNetworkConfigSnapshot(std::wstring& log, const std::wstring& folder = L"");
+
+    // Resets the WinHTTP proxy (used by Windows Update and many services) to
+    // "direct access, no proxy" - fixes the common "leftover corporate/VPN
+    // proxy still configured" cause of Windows Update / background service
+    // failures that a browser proxy setting change alone won't touch.
+    static bool ResetWinHttpProxy(std::wstring& log);
+
+    // Creates a Windows System Restore point via PowerShell's Checkpoint-Computer -
+    // a whole-system undo button (registry, installed drivers, system files),
+    // not just a network settings rollback. Requires System Protection to be
+    // enabled for at least one drive; Windows normally allows only one of
+    // these every 24 hours by default.
+    static bool CreateRestorePoint(std::wstring& log);
 };

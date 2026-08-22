@@ -31,6 +31,9 @@ struct TopoState {
     std::vector<TopoNode> nodes;
     std::vector<TopoLine> lines;
     int selected = -1;
+    std::wstring selectedKey; // node title of the selected node - stable across
+                                // rebuilds, so the periodic auto-refresh doesn't
+                                // wipe out what the user clicked
     HFONT fontTitle = nullptr;
     HFONT fontBody = nullptr;
     int lastWidth = 0, lastHeight = 0;
@@ -166,6 +169,21 @@ void Layout(TopoState& st, int width, int height) {
 
     (void)internetIdx;
     (void)pcIdx;
+
+    // Re-resolve the selection by identity (title), not by index - the node
+    // list was just rebuilt from scratch, so any previously-selected index
+    // would now point at a different (or nonexistent) node. This is what
+    // makes a click's details panel survive the periodic auto-refresh
+    // instead of reverting a few seconds later.
+    st.selected = -1;
+    if (!st.selectedKey.empty()) {
+        for (size_t i = 0; i < st.nodes.size(); ++i) {
+            if (st.nodes[i].title == st.selectedKey) {
+                st.selected = (int)i;
+                break;
+            }
+        }
+    }
 }
 
 void PaintNode(HDC hdc, const TopoNode& node, bool selected, HFONT fontTitle, HFONT fontBody) {
@@ -304,7 +322,9 @@ LRESULT CALLBACK TopoWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         case WM_LBUTTONDOWN:
             if (st) {
                 POINT pt{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-                st->selected = HitTestNode(*st, pt);
+                int hit = HitTestNode(*st, pt);
+                st->selected = hit;
+                st->selectedKey = (hit >= 0) ? st->nodes[hit].title : L"";
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
@@ -359,7 +379,10 @@ void TopologyView_SetData(HWND view, const std::vector<NetworkAdapterInfo>& adap
     auto st = reinterpret_cast<TopoState*>(GetWindowLongPtrW(view, GWLP_USERDATA));
     if (!st) return;
     st->adapters = adapters;
-    st->selected = -1;
+    // Note: selection is intentionally NOT cleared here - Layout() below
+    // re-resolves st->selected from st->selectedKey against the freshly
+    // rebuilt node list, so a click survives the periodic auto-refresh
+    // instead of reverting to the default hint text a few seconds later.
     RECT rc; GetClientRect(view, &rc);
     Layout(*st, rc.right - rc.left, rc.bottom - rc.top);
     InvalidateRect(view, nullptr, FALSE);

@@ -10,6 +10,7 @@
 #include "RulesEngine.h"
 #include "QuickActions.h"
 #include "TopologyView.h"
+#include "HelpContent.h"
 #include <vector>
 #include <thread>
 #include <atomic>
@@ -74,6 +75,8 @@ private:
     HWND m_lvHardware = nullptr;
     HWND m_lvSecurity = nullptr;
     HWND m_topologyView = nullptr;
+    HWND m_edHelp = nullptr;
+    HWND m_btnOpenCmd = nullptr, m_btnOpenPs = nullptr;
     HWND m_lvRepairCatalog = nullptr, m_edRepairLog = nullptr, m_btnRunRepair = nullptr;
     HWND m_edReport = nullptr;
     HWND m_btnSaveTxt = nullptr, m_btnSaveHtml = nullptr, m_btnSaveMd = nullptr, m_btnSaveJson = nullptr;

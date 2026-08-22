@@ -131,5 +131,54 @@ std::vector<QuickAction> GetQuickActionsFor(const CheckResult& r) {
         return actions;
     }
 
+    // --- Hosts file ---
+    if (r.name == L"Hosts file") {
+        wchar_t sysDir[MAX_PATH];
+        GetSystemDirectoryW(sysDir, MAX_PATH);
+        std::wstring hostsPath = std::wstring(sysDir) + L"\\drivers\\etc\\hosts";
+        actions.push_back({ L"Open hosts file in Notepad",
+                             QuickActionKind::LaunchTool, L"notepad.exe", L"\"" + hostsPath + L"\"" });
+        return actions;
+    }
+
+    // --- Proxy settings ---
+    if (r.name == L"Browser/app proxy (WinINet)") {
+        actions.push_back({ L"Open proxy settings",
+                             QuickActionKind::LaunchTool, L"ms-settings:network-proxy", L"" });
+        return actions;
+    }
+    if (r.name == L"System proxy (WinHTTP)") {
+        actions.push_back({ L"Reset WinHTTP proxy",
+                             QuickActionKind::RepairCatalogId, L"reset_winhttp_proxy", L"" });
+        actions.push_back({ L"Open proxy settings",
+                             QuickActionKind::LaunchTool, L"ms-settings:network-proxy", L"" });
+        return actions;
+    }
+
+    // --- Clock / time sync ---
+    if (r.name == L"System clock / time sync") {
+        actions.push_back({ L"Open Date & Time settings",
+                             QuickActionKind::LaunchTool, L"ms-settings:dateandtime", L"" });
+        actions.push_back({ L"Restart Windows Time service",
+                             QuickActionKind::RestartService, L"W32Time", L"" });
+        return actions;
+    }
+
+    // --- System Restore ---
+    if (r.name == L"System Restore points") {
+        actions.push_back({ L"Create Restore Point Now",
+                             QuickActionKind::RepairCatalogId, L"create_restore_point", L"" });
+        actions.push_back({ L"Open System Restore",
+                             QuickActionKind::LaunchTool, L"rstrui.exe", L"" });
+        return actions;
+    }
+
+    // --- Autostart ---
+    if (r.name == L"Autostart programs") {
+        actions.push_back({ L"Open Task Manager (Startup tab)",
+                             QuickActionKind::LaunchTool, L"taskmgr.exe", L"" });
+        return actions;
+    }
+
     return actions;
 }

@@ -251,6 +251,29 @@ std::wstring RepairEngine::ExportNetworkConfigSnapshot(std::wstring& log, const 
     return path;
 }
 
+bool RepairEngine::ResetWinHttpProxy(std::wstring& log) {
+    log = RunCommandCaptureOutput(L"netsh winhttp reset proxy", 10000);
+    return log.find(L"Direct access") != std::wstring::npos ||
+           log.find(L"reset") != std::wstring::npos;
+}
+
+bool RepairEngine::CreateRestorePoint(std::wstring& log) {
+    log = RunCommandCaptureOutput(
+        L"powershell -NoProfile -NonInteractive -Command "
+        L"\"Checkpoint-Computer -Description 'WinDiagPro pre-repair snapshot' "
+        L"-RestorePointType MODIFY_SETTINGS\"", 60000);
+
+    bool looksLikeError = log.find(L"Exception") != std::wstring::npos ||
+                           log.find(L"error") != std::wstring::npos ||
+                           log.find(L"Error") != std::wstring::npos;
+    if (log.empty()) {
+        log = L"Restore point requested (Checkpoint-Computer produces no output on success). "
+              L"Note: Windows only allows one System Protection restore point every 24 hours by "
+              L"default - if one was already created recently, this call may be a silent no-op.";
+    }
+    return !looksLikeError;
+}
+
 std::vector<RepairAction> RepairEngine::GetCatalog() {
     std::vector<RepairAction> actions;
 
@@ -339,6 +362,25 @@ std::vector<RepairAction> RepairEngine::GetCatalog() {
         L"a before/after reference so you can compare what changed after a repair.",
         false,
         [](std::wstring& log) { auto path = RepairEngine::ExportNetworkConfigSnapshot(log); return !path.empty(); }
+    });
+
+    actions.push_back({
+        L"reset_winhttp_proxy", L"Reset WinHTTP Proxy",
+        L"Resets the system-wide (WinHTTP) proxy to direct access, no proxy. Fixes "
+        L"a stale proxy left behind by old VPN/corporate software that blocks "
+        L"Windows Update and other services even though your browser works fine.",
+        false,
+        [](std::wstring& log) { return RepairEngine::ResetWinHttpProxy(log); }
+    });
+
+    actions.push_back({
+        L"create_restore_point", L"Create System Restore Point Now",
+        L"Creates a Windows System Restore point via PowerShell's Checkpoint-Computer - "
+        L"a whole-system undo button (registry, drivers, system files), not just a "
+        L"network settings rollback. Requires System Protection to be enabled for at "
+        L"least one drive; Windows normally allows only one of these every 24 hours.",
+        false,
+        [](std::wstring& log) { return RepairEngine::CreateRestorePoint(log); }
     });
 
     return actions;

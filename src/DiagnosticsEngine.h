@@ -87,4 +87,13 @@ private:
     static bool IsVirtualAdapterDescription(const std::wstring& desc);
     static DWORD GetInterfaceMetric(DWORD ifIndex);
     static std::wstring GetGatewayNudState(DWORD ifIndex, const std::wstring& gatewayIp);
+
+    // These three specifically target "the network/internet looks fine but
+    // browsing still doesn't work" - each is a classic cause that a plain
+    // adapter/gateway/DNS check completely misses.
+    static std::vector<CheckResult> CheckHostsFile();     // hijacked/stale entries in the hosts file
+    static std::vector<CheckResult> CheckProxySettings(); // WinINet + WinHTTP proxy misconfiguration
+    static std::vector<CheckResult> CheckTimeSync();      // wrong system clock breaks TLS/HTTPS silently
+    static std::vector<CheckResult> CheckSystemRestore();  // is there a whole-system undo button available?
+    static std::vector<CheckResult> CheckAutostartEntries(); // registry Run/RunOnce - explains "it keeps coming back"
 };

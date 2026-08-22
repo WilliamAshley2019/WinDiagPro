@@ -9,6 +9,7 @@
 #include <comdef.h>
 #include <memory>
 #include <algorithm>
+#include <sstream>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -583,6 +584,12 @@ std::vector<CheckResult> DiagnosticsEngine::RunSystemChecks() {
         out.push_back(r);
     }
 
+    auto timeSync = CheckTimeSync();
+    out.insert(out.end(), timeSync.begin(), timeSync.end());
+
+    auto restore = CheckSystemRestore();
+    out.insert(out.end(), restore.begin(), restore.end());
+
     return out;
 }
 
@@ -688,6 +695,320 @@ std::vector<CheckResult> DiagnosticsEngine::RunSecurityChecks() {
     auto defender = CheckServiceState(L"WinDefend", L"Windows Defender Antivirus", true);
     out.insert(out.end(), defender.begin(), defender.end());
 
+    auto hosts = CheckHostsFile();
+    out.insert(out.end(), hosts.begin(), hosts.end());
+
+    auto proxy = CheckProxySettings();
+    out.insert(out.end(), proxy.begin(), proxy.end());
+
+    auto autostart = CheckAutostartEntries();
+    out.insert(out.end(), autostart.begin(), autostart.end());
+
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Checks specifically for "the network/internet looks fine but browsing
+// still doesn't work" - each targets a classic cause that adapter/gateway/
+// DNS-server checks alone completely miss.
+// ---------------------------------------------------------------------------
+std::vector<CheckResult> DiagnosticsEngine::CheckHostsFile() {
+    std::vector<CheckResult> out;
+
+    wchar_t sysDir[MAX_PATH];
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    std::wstring hostsPath = std::wstring(sysDir) + L"\\drivers\\etc\\hosts";
+
+    HANDLE h = CreateFileW(hostsPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    CheckResult r;
+    r.name = L"Hosts file";
+    r.category = DiagCategory::Security;
+
+    if (h == INVALID_HANDLE_VALUE) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not read " + hostsPath + L" (may require Administrator).";
+        out.push_back(r);
+        return out;
+    }
+
+    DWORD size = GetFileSize(h, nullptr);
+    std::string raw;
+    if (size != INVALID_FILE_SIZE && size > 0 && size < 5 * 1024 * 1024) {
+        raw.resize(size);
+        DWORD bytesRead = 0;
+        ReadFile(h, raw.data(), size, &bytesRead, nullptr);
+        raw.resize(bytesRead);
+    }
+    CloseHandle(h);
+
+    std::wstring content = AnsiToWide(raw, CP_ACP);
+    std::vector<std::wstring> activeEntries;
+    std::wstringstream ss(content);
+    std::wstring line;
+    while (std::getline(ss, line)) {
+        // Trim trailing \r and surrounding whitespace.
+        while (!line.empty() && (line.back() == L'\r' || line.back() == L' ' || line.back() == L'\t')) line.pop_back();
+        size_t start = line.find_first_not_of(L" \t");
+        if (start == std::wstring::npos) continue; // blank line
+        line = line.substr(start);
+        if (line.empty() || line[0] == L'#') continue; // comment
+
+        // Ignore the standard loopback-to-localhost entries; anything else is
+        // a real, active hostname redirection worth a human looking at.
+        bool isStandardLoopback =
+            (line.find(L"127.0.0.1") == 0 || line.find(L"::1") == 0) &&
+            line.find(L"localhost") != std::wstring::npos;
+        if (isStandardLoopback) continue;
+
+        activeEntries.push_back(line);
+    }
+
+    if (activeEntries.empty()) {
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        r.details = L"No unexpected entries - only comments/blank lines (or standard localhost mappings).";
+    } else {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::High;
+        std::wstring joined;
+        for (size_t i = 0; i < activeEntries.size() && i < 10; ++i) {
+            joined += activeEntries[i];
+            if (i + 1 < activeEntries.size()) joined += L" | ";
+        }
+        r.details = std::to_wstring(activeEntries.size()) + L" active entry/entries redirecting specific "
+                    L"hostnames: " + joined +
+                    L". This is a classic cause of \"some websites won't load/resolve while others "
+                    L"work fine\" - either intentional (ad-blocking, dev/testing) or a sign of "
+                    L"tampering/malware if you don't recognize these.";
+        r.recommendation = L"Right-click this row to open the hosts file in Notepad and review it. "
+                            L"Remove any line you don't recognize, save, then re-run this check.";
+        out.push_back(r);
+        return out;
+    }
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckProxySettings() {
+    std::vector<CheckResult> out;
+
+    // WinINet (browser/most desktop apps) proxy - HKCU, no admin required to read.
+    {
+        HKEY key = nullptr;
+        CheckResult r;
+        r.name = L"Browser/app proxy (WinINet)";
+        r.category = DiagCategory::Security;
+
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                           L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                           0, KEY_READ, &key) == ERROR_SUCCESS) {
+            DWORD proxyEnable = 0, size = sizeof(proxyEnable);
+            RegGetValueW(key, nullptr, L"ProxyEnable", RRF_RT_REG_DWORD, nullptr, &proxyEnable, &size);
+
+            if (proxyEnable != 0) {
+                wchar_t serverBuf[512] = {0};
+                DWORD serverSize = sizeof(serverBuf);
+                RegGetValueW(key, nullptr, L"ProxyServer", RRF_RT_REG_SZ, nullptr, serverBuf, &serverSize);
+                r.status = DiagStatus::Warning;
+                r.severity = Severity::Medium;
+                r.details = L"A proxy is configured and enabled: " + std::wstring(serverBuf) +
+                            L". If this proxy server is unreachable or misconfigured, web browsing "
+                            L"and app updates will fail even though the network/DNS/gateway are fine.";
+                r.recommendation = L"If you don't intentionally use a proxy, right-click this row to open "
+                                    L"proxy settings and disable it.";
+            } else {
+                r.status = DiagStatus::Pass;
+                r.severity = Severity::Low;
+                r.details = L"No browser/app proxy configured (direct connection).";
+            }
+            RegCloseKey(key);
+        } else {
+            r.status = DiagStatus::Info;
+            r.severity = Severity::Low;
+            r.details = L"Could not read proxy configuration.";
+        }
+        out.push_back(r);
+    }
+
+    // WinHTTP proxy - separate from WinINet above; used by Windows Update,
+    // many Windows services, and some line-of-business apps. A stale WinHTTP
+    // proxy (often left behind by old corporate/VPN software) is a very
+    // common, easily-missed cause of "Windows Update is stuck" or "some
+    // services can't reach the internet but my browser works fine".
+    {
+        CheckResult r;
+        r.name = L"System proxy (WinHTTP)";
+        r.category = DiagCategory::Security;
+        std::wstring output = RunCommandCaptureOutput(L"netsh winhttp show proxy", 10000);
+
+        if (output.find(L"Direct access") != std::wstring::npos) {
+            r.status = DiagStatus::Pass;
+            r.severity = Severity::Low;
+            r.details = L"No system-wide (WinHTTP) proxy configured.";
+        } else if (output.find(L"Proxy Server") != std::wstring::npos) {
+            r.status = DiagStatus::Warning;
+            r.severity = Severity::Medium;
+            r.details = L"A system-wide WinHTTP proxy is configured. This affects Windows Update and "
+                        L"many services directly. Output: " + output.substr(0, 300);
+            r.recommendation = L"If this wasn't set up intentionally (e.g. leftover from old VPN/corporate "
+                                L"software), use the \"Reset WinHTTP Proxy\" repair action.";
+        } else {
+            r.status = DiagStatus::Info;
+            r.severity = Severity::Low;
+            r.details = L"Could not determine WinHTTP proxy state.";
+        }
+        out.push_back(r);
+    }
+
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckTimeSync() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"System clock / time sync";
+    r.category = DiagCategory::System;
+
+    auto svcCheck = CheckServiceState(L"W32Time", L"Windows Time", true);
+    bool serviceRunning = !svcCheck.empty() && svcCheck[0].status == DiagStatus::Pass;
+
+    std::wstring output = RunCommandCaptureOutput(L"w32tm /query /status", 10000);
+    bool neverSynced = output.find(L"has not yet synchronized") != std::wstring::npos ||
+                        output.empty();
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t dateBuf[64];
+    swprintf_s(dateBuf, L"%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+
+    if (!serviceRunning) {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::Medium;
+        r.details = L"Windows Time service is not running. Current system clock: " + std::wstring(dateBuf) +
+                    L". An incorrect clock is a very common, easy-to-miss cause of HTTPS/TLS sites "
+                    L"failing to load (certificate validation depends on the clock being roughly "
+                    L"correct) even when the network itself is completely fine.";
+        r.recommendation = L"Right-click to open Date & Time settings and verify the date/time are "
+                            L"correct, or restart the Windows Time service.";
+    } else if (neverSynced) {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::Low;
+        r.details = L"Windows Time service is running but reports it has not yet successfully "
+                    L"synchronized. Current system clock: " + std::wstring(dateBuf) +
+                    L". Worth double-checking the date/time are correct if HTTPS sites are failing "
+                    L"to load with certificate errors.";
+        r.recommendation = L"Verify the date/time in Settings, or run: w32tm /resync (needs a working "
+                            L"time source, which requires network/domain connectivity).";
+    } else {
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        r.details = L"Windows Time service is running and has synchronized. Current system clock: " +
+                    std::wstring(dateBuf);
+    }
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckSystemRestore() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"System Restore points";
+    r.category = DiagCategory::System;
+
+    std::wstring countOutput = RunCommandCaptureOutput(
+        L"powershell -NoProfile -NonInteractive -Command "
+        L"\"(Get-ComputerRestorePoint | Measure-Object).Count\"", 20000);
+
+    int count = -1;
+    size_t digitStart = countOutput.find_first_of(L"0123456789");
+    if (digitStart != std::wstring::npos) {
+        try { count = std::stoi(countOutput.substr(digitStart)); } catch (...) { count = -1; }
+    }
+
+    if (count < 0) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not determine System Restore status (it may be disabled, or unavailable "
+                    L"on this Windows edition/policy).";
+        r.recommendation = L"Right-click to open System Restore directly and check/enable it there.";
+    } else if (count == 0) {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::Medium;
+        r.details = L"No System Restore points found.";
+        r.recommendation = L"Consider creating one (right-click this row) before making system changes - "
+                            L"it's the single best whole-system undo button if a repair goes wrong, not "
+                            L"just a network/driver rollback.";
+    } else {
+        std::wstring latest = RunCommandCaptureOutput(
+            L"powershell -NoProfile -NonInteractive -Command "
+            L"\"$p = Get-ComputerRestorePoint | Sort-Object SequenceNumber -Descending | "
+            L"Select-Object -First 1; if ($p) { $p.CreationTime.ToString() + ' - ' + $p.Description }\"",
+            20000);
+        while (!latest.empty() && (latest.back() == L'\r' || latest.back() == L'\n' || latest.back() == L' '))
+            latest.pop_back();
+        size_t s = latest.find_first_not_of(L" \r\n");
+        latest = (s != std::wstring::npos) ? latest.substr(s) : L"";
+
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        r.details = std::to_wstring(count) + L" restore point(s) found." +
+                     (latest.empty() ? L"" : (L" Most recent: " + latest));
+    }
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckAutostartEntries() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"Autostart programs";
+    r.category = DiagCategory::Security;
+
+    struct RunKey { HKEY root; const wchar_t* path; };
+    static const RunKey keys[] = {
+        { HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" },
+        { HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" },
+        { HKEY_CURRENT_USER,  L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" },
+        { HKEY_CURRENT_USER,  L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce" },
+    };
+
+    std::vector<std::wstring> names;
+    for (auto& k : keys) {
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(k.root, k.path, 0, KEY_READ, &hKey) != ERROR_SUCCESS) continue;
+
+        DWORD index = 0;
+        for (;;) {
+            wchar_t valueName[256];
+            DWORD nameSize = 256;
+            LONG res = RegEnumValueW(hKey, index, valueName, &nameSize, nullptr, nullptr, nullptr, nullptr);
+            if (res == ERROR_NO_MORE_ITEMS) break;
+            if (res == ERROR_SUCCESS) names.push_back(valueName);
+            ++index;
+        }
+        RegCloseKey(hKey);
+    }
+
+    r.status = DiagStatus::Info;
+    r.severity = Severity::Low;
+    if (names.empty()) {
+        r.details = L"No registry-based autostart entries found.";
+    } else {
+        std::wstring joined;
+        for (size_t i = 0; i < names.size() && i < 20; ++i) {
+            joined += names[i];
+            if (i + 1 < names.size() && i < 19) joined += L", ";
+        }
+        r.details = std::to_wstring(names.size()) + L" autostart program(s): " + joined +
+                    L". Worth reviewing anything you don't recognize - malware sometimes reapplies "
+                    L"proxy/hosts-file/DNS changes on every boot via an autostart entry, which is why "
+                    L"a fix can seem to \"come back\" after a restart.";
+        r.recommendation = L"Right-click this row to open Task Manager's Startup tab for full details "
+                            L"and to disable anything unfamiliar.";
+    }
+    out.push_back(r);
     return out;
 }
 

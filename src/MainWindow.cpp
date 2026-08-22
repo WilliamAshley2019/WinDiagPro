@@ -20,6 +20,7 @@ namespace {
         TAB_TOPOLOGY,
         TAB_REPAIR,
         TAB_REPORT,
+        TAB_HELP,
         TAB_COUNT
     };
 
@@ -34,6 +35,7 @@ namespace {
         ID_TOPOLOGY_VIEW,
         ID_LV_REPAIR, ID_ED_REPAIRLOG, ID_BTN_RUNREPAIR,
         ID_ED_REPORT, ID_BTN_SAVE_TXT, ID_BTN_SAVE_HTML, ID_BTN_SAVE_MD, ID_BTN_SAVE_JSON,
+        ID_ED_HELP, ID_BTN_OPEN_CMD, ID_BTN_OPEN_PS,
     };
 
     constexpr UINT_PTR ID_TOPOLOGY_TIMER = 1;
@@ -211,7 +213,7 @@ void MainWindow::OnCreate(HWND hwnd) {
     m_hTab = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                               0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)ID_TAB, hInst, nullptr);
     const wchar_t* tabNames[TAB_COUNT] = {
-        L"Dashboard", L"Network", L"System", L"Hardware", L"Security", L"Topology", L"Repair", L"Report"
+        L"Dashboard", L"Network", L"System", L"Hardware", L"Security", L"Topology", L"Repair", L"Report", L"Help"
     };
     for (int i = 0; i < TAB_COUNT; ++i) {
         TCITEMW item{};
@@ -281,6 +283,17 @@ void MainWindow::OnCreate(HWND hwnd) {
     m_btnSaveMd = MakeButton(hwnd, ID_BTN_SAVE_MD, L"Save as .md", hInst);
     m_btnSaveJson = MakeButton(hwnd, ID_BTN_SAVE_JSON, L"Save as .json", hInst);
 
+    // Help tab - static, curated content baked into the EXE (see HelpContent.h).
+    // Available with zero network access, unlike Microsoft's own online
+    // troubleshooters - this is the whole point of the project.
+    m_edHelp = MakeReadOnlyEdit(hwnd, ID_ED_HELP, hInst);
+    SetWindowTextW(m_edHelp, GetOfflineHelpText().c_str());
+    // A safety valve: if you need to go deeper than this app, an elevated
+    // terminal is one click away rather than hunting through a Start menu
+    // that might itself be misbehaving.
+    m_btnOpenCmd = MakeButton(hwnd, ID_BTN_OPEN_CMD, L"Open Command Prompt (Admin)", hInst);
+    m_btnOpenPs = MakeButton(hwnd, ID_BTN_OPEN_PS, L"Open PowerShell (Admin)", hInst);
+
     // Status bar
     m_hStatus = CreateWindowExW(0, STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                  0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)ID_STATUS, hInst, nullptr);
@@ -292,7 +305,8 @@ void MainWindow::OnCreate(HWND hwnd) {
                      m_btnSysScan, m_btnSfc, m_btnDismCheck, m_btnDismScan, m_lvSystem,
                      m_btnHwScan, m_lvHardware, m_btnSecScan, m_lvSecurity,
                      m_lvRepairCatalog, m_btnRunRepair, m_edRepairLog,
-                     m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson, m_hStatus };
+                     m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson, m_edHelp,
+                     m_btnOpenCmd, m_btnOpenPs, m_hStatus };
     for (HWND k : kids) if (k) SendMessageW(k, WM_SETFONT, (WPARAM)m_uiFont, TRUE);
 
     SetBusy(false, L"Ready.");
@@ -326,7 +340,8 @@ void MainWindow::LayoutTab(int index) {
                         m_btnSecScan, m_lvSecurity,
                         m_topologyView,
                         m_lvRepairCatalog, m_btnRunRepair, m_edRepairLog,
-                        m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson };
+                        m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson,
+                        m_edHelp, m_btnOpenCmd, m_btnOpenPs };
         for (HWND hh : all) {
             if (!hh) continue;
             bool show = false;
@@ -406,6 +421,14 @@ void MainWindow::LayoutTab(int index) {
                          w - margin * 2, h - (margin * 2 + btnH) - margin, SWP_NOZORDER);
             break;
         }
+        case TAB_HELP: {
+            hideAllExcept({ m_edHelp, m_btnOpenCmd, m_btnOpenPs });
+            SetWindowPos(m_btnOpenCmd, nullptr, x + margin, y + margin, 220, btnH, SWP_NOZORDER);
+            SetWindowPos(m_btnOpenPs, nullptr, x + margin + 228, y + margin, 200, btnH, SWP_NOZORDER);
+            SetWindowPos(m_edHelp, nullptr, x + margin, y + margin * 2 + btnH,
+                         w - margin * 2, h - (margin * 2 + btnH) - margin, SWP_NOZORDER);
+            break;
+        }
     }
 }
 
@@ -478,6 +501,19 @@ void MainWindow::OnCommand(int id, HWND) {
         case ID_BTN_SAVE_HTML: SaveReport(1); break;
         case ID_BTN_SAVE_MD: SaveReport(2); break;
         case ID_BTN_SAVE_JSON: SaveReport(3); break;
+        case ID_BTN_OPEN_CMD:
+            // Launched from an already-elevated process, so this inherits
+            // elevation automatically - no separate "Run as administrator"
+            // prompt needed.
+            if (!LaunchExternalTool(L"cmd.exe")) {
+                MessageBoxW(m_hwnd, L"Could not launch Command Prompt.", L"WinDiagPro", MB_OK | MB_ICONWARNING);
+            }
+            break;
+        case ID_BTN_OPEN_PS:
+            if (!LaunchExternalTool(L"powershell.exe")) {
+                MessageBoxW(m_hwnd, L"Could not launch PowerShell.", L"WinDiagPro", MB_OK | MB_ICONWARNING);
+            }
+            break;
         case ID_BTN_RUNREPAIR: {
             if (m_busy) { MessageBeep(MB_ICONWARNING); break; }
             int count = ListView_GetItemCount(m_lvRepairCatalog);

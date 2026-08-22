@@ -62,6 +62,11 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <!-- Static CRT: the resulting EXE doesn't need the Visual C++
+           Redistributable installed - matters when running from a WinRE/
+           recovery USB stick or a freshly-imaged machine with no internet
+           access to fetch it. -->
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -88,6 +93,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -123,6 +129,7 @@
     <ClInclude Include="src\ReportGenerator.h" />
     <ClInclude Include="src\QuickActions.h" />
     <ClInclude Include="src\TopologyView.h" />
+    <ClInclude Include="src\HelpContent.h" />
     <ClInclude Include="src\MainWindow.h" />
     <ClInclude Include="src\resource.h" />
   </ItemGroup>

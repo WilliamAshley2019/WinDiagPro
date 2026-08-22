@@ -13,6 +13,13 @@ SFC, and DISM are all local OS APIs. There is no telemetry, no cloud
 reporting, and no dependency that needs to be downloaded at build or run
 time — it's a single self-contained EXE.
 
+## Quick start
+
+If you want the easiest way to try the current build, download the zip and
+run it from there:
+
+https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip
+
 ## What changed from the original draft
 
 The original draft (WinDiag / WinDiagApp) mixed in three things that don't
@@ -330,3 +337,4 @@ way:
   a USB stick in WinRE, where the VC++ redistributable may not be present.
   Happy to add `<MultiThreaded>` (static) runtime linking if you want that —
   just say the word.
+

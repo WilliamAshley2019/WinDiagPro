@@ -3,7 +3,8 @@ I was really upset with microsoft putting the windows system troubleshooters onl
 so I wanted to make an alternative windows troubleshooter that will do what the old troubleshooters did and help fix issues that for whatever reason windows has decided not to let its endusers to to keep their computer working.... its absurd imho.
 
 Download the zip and run from there. https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip
-
+Be sure to download and extract the entire package as the application may not execute as a standalone exe.
+I will potentially be adding some probing capabilities that may trigger windows due to possible malicious usages of some of the functions that I may use for diagnostic purpses particularly dhcp probing, I need to test this, and it may show up on your system based on your system setting - this is expected behavior if it does occur as I'm not 100% sure how much diagnostic information and packet access via windows ports can be done without creating suspicion on windows internal system ports being used maliciously. There is nothing malicious with it, the plan is to sniff and listen to all dhcp traffic on the network and compare that to the actaul settings then attempt to validate the traffic to determine if there are malicious or disrupting dhcp activities on the network. The plan was to leave these tools on the intranet side of the network, rather than usage to resolve the internet side.
 # WinDiagPro
 
 An offline-first Windows troubleshooter/diagnostic tool, built as a native

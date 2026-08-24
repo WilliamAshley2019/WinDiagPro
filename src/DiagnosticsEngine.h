@@ -75,12 +75,44 @@ public:
 
     std::vector<NetworkAdapterInfo> GetAdapters() const { return m_adapters; }
 
+    // Runs tracert toward 'target' to reveal the path BEYOND the local
+    // default gateway - switches/hubs are invisible (they're Layer 2, no IP
+    // hop), but additional routers, modems, and ISP equipment show up here,
+    // including detecting carrier-grade NAT (CGNAT, RFC 6598, 100.64.0.0/10)
+    // which is otherwise completely invisible from the LAN side. Optionally
+    // forces the trace out through a specific local adapter (sourceIp)
+    // rather than letting Windows pick the route. On-demand only (can take
+    // up to ~30-60 seconds) - not part of the automatic scans.
+    static std::vector<CheckResult> RunTraceroute(const std::wstring& sourceIp = L"",
+                                                    const std::wstring& target = L"1.1.1.1");
+
+    // "What's actually on my network right now" - a device inventory from
+    // the ARP/neighbor table, with each entry's MAC address and which local
+    // adapter it was seen on. Instance method (needs m_adapters for the
+    // ifIndex -> friendly-name lookup).
+    std::vector<CheckResult> CheckLocalDevices();
+
+    // Shows what's currently cached by the DNS client - useful to see BEFORE
+    // deciding to flush it (a stale/wrong cached entry explains a symptom
+    // far more precisely than "flush it and hope").
+    static std::vector<CheckResult> CheckDnsCache();
+
 private:
     std::vector<NetworkAdapterInfo> m_adapters;
     WMIHelper m_wmi;
     bool m_winsockReady = false;
 
     bool EnumerateAdapters();
+
+    // Confirms, via a direct API query rather than an inference from metric
+    // numbers, which adapter Windows will actually use for general internet
+    // traffic - and separately, whether anything (a VPN client, leftover
+    // config) has injected a manual route that silently overrides normal
+    // adapter selection for a specific destination. Both need m_adapters
+    // for ifIndex -> friendly-name lookup, so these are instance methods
+    // rather than static like the checks below.
+    std::vector<CheckResult> CheckActiveRouting();
+    std::vector<CheckResult> CheckStaticRoutes();
     void ClassifyAdapters(); // fills in role/metric/gatewayNudState/isVirtual for m_adapters
     bool PingHost(const std::wstring& hostOrIp, DWORD timeoutMs = 1500);
     bool CanResolve(const std::wstring& hostname);

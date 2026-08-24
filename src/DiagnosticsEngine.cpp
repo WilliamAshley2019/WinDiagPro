@@ -39,6 +39,46 @@ void DiagnosticsEngine::Shutdown() {
 // ---------------------------------------------------------------------------
 // Adapter enumeration
 // ---------------------------------------------------------------------------
+namespace {
+
+// GetAdaptersAddresses' FirstGatewayAddress field is unreliable in practice
+// for IPv4 gateways learned via plain DHCP - it can (and does, confirmed by
+// real-world reports) come back empty even though the adapter has a fully
+// working gateway that ipconfig shows correctly. ipconfig doesn't rely
+// solely on that field; it effectively cross-references the IP routing
+// table. This does the same: look up the adapter's 0.0.0.0/0 default route
+// directly, which is authoritative (it's what actually determines traffic
+// behavior) rather than a possibly-stale adapter property.
+std::wstring FindDefaultGatewayFromRouteTable(DWORD ifIndex) {
+    PMIB_IPFORWARD_TABLE2 table = nullptr;
+    if (GetIpForwardTable2(AF_INET, &table) != NO_ERROR || !table) return L"";
+
+    std::wstring gateway;
+    ULONG bestMetric = 0;
+    bool found = false;
+    for (ULONG i = 0; i < table->NumEntries; ++i) {
+        auto& row = table->Table[i];
+        if (row.InterfaceIndex != ifIndex) continue;
+        if (row.DestinationPrefix.PrefixLength != 0) continue; // only the default route (0.0.0.0/0)
+        if (row.DestinationPrefix.Prefix.si_family != AF_INET) continue;
+
+        auto& nh = row.NextHop.Ipv4.sin_addr;
+        if (nh.S_un.S_addr == 0) continue; // an all-zero next hop isn't a real gateway
+
+        if (!found || row.Metric < bestMetric) {
+            char buf[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &nh, buf, sizeof(buf));
+            gateway = AnsiToWide(buf, CP_ACP);
+            bestMetric = row.Metric;
+            found = true;
+        }
+    }
+    FreeMibTable(table);
+    return gateway;
+}
+
+} // namespace
+
 bool DiagnosticsEngine::EnumerateAdapters() {
     m_adapters.clear();
 
@@ -86,13 +126,18 @@ bool DiagnosticsEngine::EnumerateAdapters() {
             }
         }
 
-        for (auto pg = p->FirstGatewayAddress; pg != nullptr; pg = pg->Next) {
-            if (pg->Address.lpSockaddr->sa_family == AF_INET) {
-                char ip[INET_ADDRSTRLEN] = {0};
-                auto sin = reinterpret_cast<sockaddr_in*>(pg->Address.lpSockaddr);
-                inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
-                a.gateway = AnsiToWide(ip, CP_ACP);
-                break;
+        // Route table first (authoritative - see FindDefaultGatewayFromRouteTable
+        // comment above), adapter field only as a fallback if that comes up empty.
+        a.gateway = FindDefaultGatewayFromRouteTable(a.ifIndex);
+        if (a.gateway.empty()) {
+            for (auto pg = p->FirstGatewayAddress; pg != nullptr; pg = pg->Next) {
+                if (pg->Address.lpSockaddr->sa_family == AF_INET) {
+                    char ip[INET_ADDRSTRLEN] = {0};
+                    auto sin = reinterpret_cast<sockaddr_in*>(pg->Address.lpSockaddr);
+                    inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+                    a.gateway = AnsiToWide(ip, CP_ACP);
+                    break;
+                }
             }
         }
 
@@ -419,7 +464,117 @@ std::vector<CheckResult> DiagnosticsEngine::RunNetworkChecks() {
         out.push_back(r);
     }
 
+    auto activeRouting = CheckActiveRouting();
+    out.insert(out.end(), activeRouting.begin(), activeRouting.end());
+
+    auto staticRoutes = CheckStaticRoutes();
+    out.insert(out.end(), staticRoutes.begin(), staticRoutes.end());
+
+    auto localDevices = CheckLocalDevices();
+    out.insert(out.end(), localDevices.begin(), localDevices.end());
+
+    auto dnsCache = CheckDnsCache();
+    out.insert(out.end(), dnsCache.begin(), dnsCache.end());
+
     (void)anyConnected;
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckActiveRouting() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"Active route selection";
+    r.category = DiagCategory::Network;
+
+    sockaddr_in dest{};
+    dest.sin_family = AF_INET;
+    inet_pton(AF_INET, "1.1.1.1", &dest.sin_addr);
+
+    DWORD bestIfIndex = 0;
+    DWORD apiResult = GetBestInterfaceEx(reinterpret_cast<sockaddr*>(&dest), &bestIfIndex);
+
+    if (apiResult != NO_ERROR) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not determine which adapter Windows would use for general internet traffic.";
+    } else {
+        std::wstring adapterName;
+        for (auto& a : m_adapters) {
+            if (a.ifIndex == bestIfIndex) { adapterName = a.name; break; }
+        }
+        if (adapterName.empty()) adapterName = L"(interface index " + std::to_wstring(bestIfIndex) + L")";
+
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        r.details = L"Windows would currently route general internet traffic through: " + adapterName +
+                    L". This is a direct query (GetBestInterfaceEx), not an inference from metric "
+                    L"numbers - it's the definitive answer to \"which adapter actually wins\" on a "
+                    L"multi-adapter machine, rather than something to infer from the metric column.";
+    }
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckStaticRoutes() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"Manually-configured routes";
+    r.category = DiagCategory::Network;
+
+    PMIB_IPFORWARD_TABLE2 table = nullptr;
+    if (GetIpForwardTable2(AF_INET, &table) != NO_ERROR || !table) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not read the IPv4 routing table.";
+        out.push_back(r);
+        return out;
+    }
+
+    std::vector<std::wstring> manualRoutes;
+    for (ULONG i = 0; i < table->NumEntries; ++i) {
+        auto& row = table->Table[i];
+        if (row.Origin != NlroManual) continue; // skip normal auto-generated (DHCP/well-known/RA/6to4) routes
+
+        char destBuf[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &row.DestinationPrefix.Prefix.Ipv4.sin_addr, destBuf, sizeof(destBuf));
+        char nextHopBuf[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &row.NextHop.Ipv4.sin_addr, nextHopBuf, sizeof(nextHopBuf));
+
+        std::wstring adapterName;
+        for (auto& a : m_adapters) {
+            if (a.ifIndex == row.InterfaceIndex) { adapterName = a.name; break; }
+        }
+        if (adapterName.empty()) adapterName = L"if#" + std::to_wstring(row.InterfaceIndex);
+
+        std::wstring line = AnsiToWide(destBuf, CP_ACP) + L"/" +
+                             std::to_wstring(row.DestinationPrefix.PrefixLength) + L" via " +
+                             AnsiToWide(nextHopBuf, CP_ACP) + L" on " + adapterName +
+                             L" (metric " + std::to_wstring(row.Metric) + L")";
+        manualRoutes.push_back(line);
+    }
+    FreeMibTable(table);
+
+    if (manualRoutes.empty()) {
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        r.details = L"No manually-configured (static) IPv4 routes found - only normal auto-generated ones.";
+    } else {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Medium;
+        std::wstring joined;
+        for (size_t i = 0; i < manualRoutes.size(); ++i) {
+            joined += manualRoutes[i];
+            if (i + 1 < manualRoutes.size()) joined += L" | ";
+        }
+        r.details = std::to_wstring(manualRoutes.size()) + L" manual route(s) found: " + joined +
+                    L". These override normal metric-based adapter selection for their specific "
+                    L"destination - worth knowing about if traffic to a particular address behaves "
+                    L"unexpectedly (VPN clients and some corporate software add these automatically).";
+        r.recommendation = L"Review with 'route print' in an elevated Command Prompt (Help tab has a "
+                            L"quick-launch button) if any of these are unexpected; remove with "
+                            L"'route delete <destination>'.";
+    }
+    out.push_back(r);
     return out;
 }
 
@@ -1008,6 +1163,226 @@ std::vector<CheckResult> DiagnosticsEngine::CheckAutostartEntries() {
         r.recommendation = L"Right-click this row to open Task Manager's Startup tab for full details "
                             L"and to disable anything unfamiliar.";
     }
+    out.push_back(r);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Traceroute / path-beyond-the-gateway (on-demand - not part of auto scans)
+// ---------------------------------------------------------------------------
+namespace {
+
+bool IsIPv4Address(const std::wstring& s, IN_ADDR* outAddr = nullptr) {
+    std::string ansi = WideToUtf8(s);
+    IN_ADDR addr{};
+    if (inet_pton(AF_INET, ansi.c_str(), &addr) != 1) return false;
+    if (outAddr) *outAddr = addr;
+    return true;
+}
+
+// RFC 6598: 100.64.0.0/10 - reserved specifically for carrier-grade NAT.
+// Seeing this address on the path (rather than on your own adapter) is
+// about as close to a definitive "yes, your ISP uses CGNAT here" signal as
+// you can get without querying the ISP directly.
+bool IsCgnatAddress(const std::wstring& ip) {
+    IN_ADDR addr{};
+    if (!IsIPv4Address(ip, &addr)) return false;
+    BYTE b1 = addr.S_un.S_un_b.s_b1;
+    BYTE b2 = addr.S_un.S_un_b.s_b2;
+    return b1 == 100 && b2 >= 64 && b2 <= 127;
+}
+
+bool IsPrivateAddress(const std::wstring& ip) {
+    IN_ADDR addr{};
+    if (!IsIPv4Address(ip, &addr)) return false;
+    BYTE b1 = addr.S_un.S_un_b.s_b1;
+    BYTE b2 = addr.S_un.S_un_b.s_b2;
+    if (b1 == 10) return true;
+    if (b1 == 172 && b2 >= 16 && b2 <= 31) return true;
+    if (b1 == 192 && b2 == 168) return true;
+    return false;
+}
+
+} // namespace
+
+std::vector<CheckResult> DiagnosticsEngine::RunTraceroute(const std::wstring& sourceIp, const std::wstring& target) {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"Traceroute to " + target + (sourceIp.empty() ? L"" : L" (from " + sourceIp + L")");
+    r.category = DiagCategory::Network;
+
+    std::wstring cmd = L"tracert -d -w 800 -h 14";
+    if (!sourceIp.empty()) cmd += L" -S " + sourceIp;
+    cmd += L" " + target;
+
+    std::wstring output = RunCommandCaptureOutput(cmd, 60000);
+
+    // Parse hop lines: "  N    <rtt> ms   <rtt> ms   <rtt> ms   <ip>" or
+    // "  N     *        *        *     Request timed out." (with -d, no
+    // hostnames appear, so any IPv4-looking token on the line is the hop).
+    struct Hop { int number; std::wstring ip; bool timedOut; };
+    std::vector<Hop> hops;
+    std::wstringstream ss(output);
+    std::wstring line;
+    while (std::getline(ss, line)) {
+        std::wstringstream ls(line);
+        int hopNum = 0;
+        if (!(ls >> hopNum)) continue; // not a hop line (banner/blank/summary text)
+
+        std::wstring token, foundIp;
+        while (ls >> token) {
+            if (IsIPv4Address(token)) foundIp = token;
+        }
+        hops.push_back({ hopNum, foundIp, foundIp.empty() });
+    }
+
+    if (hops.empty()) {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::Medium;
+        r.details = L"Could not run or parse tracert output. Raw output: " + output.substr(0, 300);
+        out.push_back(r);
+        return out;
+    }
+
+    std::wstring details;
+    bool reachedTarget = false;
+    bool anyCgnat = false;
+    int timeoutCount = 0;
+    for (auto& h : hops) {
+        details += L"Hop " + std::to_wstring(h.number) + L": ";
+        if (h.timedOut) {
+            details += L"no response";
+            ++timeoutCount;
+        } else {
+            details += h.ip;
+            if (IsCgnatAddress(h.ip)) {
+                details += L" [CARRIER-GRADE NAT - shared ISP address, RFC 6598]";
+                anyCgnat = true;
+            } else if (IsPrivateAddress(h.ip)) {
+                details += L" [private/local address]";
+            }
+            if (h.ip == target) reachedTarget = true;
+        }
+        details += L"; ";
+    }
+    r.details = details;
+
+    if (reachedTarget) {
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        if (anyCgnat) {
+            r.recommendation = L"Your path passes through carrier-grade NAT (CGNAT) - very common for "
+                                L"cable/mobile ISPs, and not itself a problem. It does mean port "
+                                L"forwarding or hosting a server at home won't work without asking your "
+                                L"ISP for a public/static IP, or using a tunneling service that provides "
+                                L"one.";
+        }
+    } else if (timeoutCount == (int)hops.size()) {
+        r.status = DiagStatus::Fail;
+        r.severity = Severity::High;
+        r.recommendation = L"Every hop timed out - the path may be blocked entirely, or this adapter "
+                            L"has no working route out at all.";
+    } else {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::Medium;
+        r.recommendation = L"The trace didn't reach the destination within the hop limit. Some networks "
+                            L"intentionally block ICMP (timeouts alone don't necessarily mean anything is "
+                            L"broken), but if this is unexpected, the last responding hop is roughly "
+                            L"where the path stops working.";
+    }
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckLocalDevices() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"Local network devices (ARP/neighbor table)";
+    r.category = DiagCategory::Network;
+
+    PMIB_IPNET_TABLE2 table = nullptr;
+    if (GetIpNetTable2(AF_INET, &table) != NO_ERROR || !table) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not read the ARP/neighbor table.";
+        out.push_back(r);
+        return out;
+    }
+
+    std::vector<std::wstring> entries;
+    for (ULONG i = 0; i < table->NumEntries; ++i) {
+        auto& row = table->Table[i];
+        // Only entries Windows has actually resolved to a real MAC - skips
+        // Unreachable/Incomplete/multicast noise so this stays a genuinely
+        // useful "what's on my LAN right now" list rather than table dump.
+        if (row.State != NlnsReachable && row.State != NlnsStale && row.State != NlnsPermanent) continue;
+        if (row.PhysicalAddressLength != 6) continue;
+
+        auto sin = reinterpret_cast<const sockaddr_in*>(&row.Address.Ipv4);
+        char ipBuf[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf));
+        std::wstring ip = AnsiToWide(ipBuf, CP_ACP);
+        if (ip == L"0.0.0.0" || ip.rfind(L"224.", 0) == 0 || ip == L"255.255.255.255") continue;
+
+        wchar_t mac[18];
+        swprintf_s(mac, L"%02X-%02X-%02X-%02X-%02X-%02X",
+                   row.PhysicalAddress[0], row.PhysicalAddress[1], row.PhysicalAddress[2],
+                   row.PhysicalAddress[3], row.PhysicalAddress[4], row.PhysicalAddress[5]);
+
+        std::wstring adapterName;
+        for (auto& a : m_adapters) {
+            if (a.ifIndex == row.InterfaceIndex) { adapterName = a.name; break; }
+        }
+
+        entries.push_back(ip + L" (" + std::wstring(mac) + L")" +
+                           (row.IsRouter ? L" [router]" : L"") +
+                           (adapterName.empty() ? L"" : L" on " + adapterName));
+    }
+    FreeMibTable(table);
+
+    r.status = DiagStatus::Info;
+    r.severity = Severity::Low;
+    if (entries.empty()) {
+        r.details = L"No resolved local devices found in the ARP/neighbor table yet - normal shortly "
+                    L"after startup before any local traffic has occurred.";
+    } else {
+        std::wstring joined;
+        for (size_t i = 0; i < entries.size() && i < 25; ++i) {
+            joined += entries[i];
+            if (i + 1 < entries.size() && i < 24) joined += L" | ";
+        }
+        r.details = std::to_wstring(entries.size()) + L" device(s) currently visible on your local "
+                    L"network: " + joined;
+    }
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::CheckDnsCache() {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"DNS client cache";
+    r.category = DiagCategory::Network;
+
+    std::wstring output = RunCommandCaptureOutput(L"ipconfig /displaydns", 15000);
+
+    // Count cached record blocks (each entry's first line looks like
+    // "    example.com" followed by "----------" then its record fields) -
+    // count the separator lines as a reliable proxy for entry count without
+    // needing a full parser.
+    size_t count = 0;
+    size_t pos = 0;
+    while ((pos = output.find(L"----------", pos)) != std::wstring::npos) {
+        ++count;
+        pos += 10;
+    }
+
+    r.status = DiagStatus::Info;
+    r.severity = Severity::Low;
+    r.details = std::to_wstring(count) + L" entries currently cached. Full details available via "
+                L"'ipconfig /displaydns' in an elevated terminal (Help tab has a quick-launch button) "
+                L"if you need to see exactly what's cached for a specific hostname before deciding "
+                L"whether to flush it.";
     out.push_back(r);
     return out;
 }

@@ -28,13 +28,14 @@ namespace {
         ID_TAB = 1000,
         ID_STATUS,
         ID_LV_DASHBOARD, ID_ED_DIAGNOSIS, ID_BTN_FULLSCAN,
-        ID_LV_NETWORK, ID_BTN_NETSCAN,
+        ID_LV_NETWORK, ID_BTN_NETSCAN, ID_BTN_TRACERT,
         ID_LV_SYSTEM, ID_BTN_SYSSCAN, ID_BTN_SFC, ID_BTN_DISM_CHECK, ID_BTN_DISM_SCAN,
         ID_LV_HARDWARE, ID_BTN_HWSCAN,
         ID_LV_SECURITY, ID_BTN_SECSCAN,
         ID_TOPOLOGY_VIEW,
         ID_LV_REPAIR, ID_ED_REPAIRLOG, ID_BTN_RUNREPAIR,
         ID_ED_REPORT, ID_BTN_SAVE_TXT, ID_BTN_SAVE_HTML, ID_BTN_SAVE_MD, ID_BTN_SAVE_JSON,
+        ID_BTN_OPEN_LAST_REPORT, ID_BTN_OPEN_LAST_REPORT_FOLDER,
         ID_ED_HELP, ID_BTN_OPEN_CMD, ID_BTN_OPEN_PS,
     };
 
@@ -229,6 +230,7 @@ void MainWindow::OnCreate(HWND hwnd) {
 
     // Network tab
     m_btnNetScan = MakeButton(hwnd, ID_BTN_NETSCAN, L"Run Network Diagnostic", hInst);
+    m_btnTracert = MakeButton(hwnd, ID_BTN_TRACERT, L"Trace Route to Internet (slow)", hInst);
     m_lvNetwork = MakeListView(hwnd, ID_LV_NETWORK, hInst);
 
     // System tab
@@ -282,6 +284,8 @@ void MainWindow::OnCreate(HWND hwnd) {
     m_btnSaveHtml = MakeButton(hwnd, ID_BTN_SAVE_HTML, L"Save as .html", hInst);
     m_btnSaveMd = MakeButton(hwnd, ID_BTN_SAVE_MD, L"Save as .md", hInst);
     m_btnSaveJson = MakeButton(hwnd, ID_BTN_SAVE_JSON, L"Save as .json", hInst);
+    m_btnOpenLastReport = MakeButton(hwnd, ID_BTN_OPEN_LAST_REPORT, L"Open Last Saved Report", hInst);
+    m_btnOpenLastReportFolder = MakeButton(hwnd, ID_BTN_OPEN_LAST_REPORT_FOLDER, L"Open Containing Folder", hInst);
 
     // Help tab - static, curated content baked into the EXE (see HelpContent.h).
     // Available with zero network access, unlike Microsoft's own online
@@ -301,11 +305,12 @@ void MainWindow::OnCreate(HWND hwnd) {
                                    0, 0, 0, 0, hwnd, nullptr, hInst, nullptr);
 
     // Apply the UI font to everything.
-    HWND kids[] = { m_hTab, m_btnFullScan, m_edDiagnosis, m_lvDashboard, m_btnNetScan, m_lvNetwork,
+    HWND kids[] = { m_hTab, m_btnFullScan, m_edDiagnosis, m_lvDashboard, m_btnNetScan, m_btnTracert, m_lvNetwork,
                      m_btnSysScan, m_btnSfc, m_btnDismCheck, m_btnDismScan, m_lvSystem,
                      m_btnHwScan, m_lvHardware, m_btnSecScan, m_lvSecurity,
                      m_lvRepairCatalog, m_btnRunRepair, m_edRepairLog,
-                     m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson, m_edHelp,
+                     m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson,
+                     m_btnOpenLastReport, m_btnOpenLastReportFolder, m_edHelp,
                      m_btnOpenCmd, m_btnOpenPs, m_hStatus };
     for (HWND k : kids) if (k) SendMessageW(k, WM_SETFONT, (WPARAM)m_uiFont, TRUE);
 
@@ -334,13 +339,14 @@ void MainWindow::LayoutTab(int index) {
 
     auto hideAllExcept = [&](std::initializer_list<HWND> visible) {
         HWND all[] = { m_btnFullScan, m_edDiagnosis, m_lvDashboard,
-                        m_btnNetScan, m_lvNetwork,
+                        m_btnNetScan, m_btnTracert, m_lvNetwork,
                         m_btnSysScan, m_btnSfc, m_btnDismCheck, m_btnDismScan, m_lvSystem,
                         m_btnHwScan, m_lvHardware,
                         m_btnSecScan, m_lvSecurity,
                         m_topologyView,
                         m_lvRepairCatalog, m_btnRunRepair, m_edRepairLog,
                         m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson,
+                        m_btnOpenLastReport, m_btnOpenLastReportFolder,
                         m_edHelp, m_btnOpenCmd, m_btnOpenPs };
         for (HWND hh : all) {
             if (!hh) continue;
@@ -363,8 +369,9 @@ void MainWindow::LayoutTab(int index) {
             break;
         }
         case TAB_NETWORK: {
-            hideAllExcept({ m_btnNetScan, m_lvNetwork });
+            hideAllExcept({ m_btnNetScan, m_btnTracert, m_lvNetwork });
             SetWindowPos(m_btnNetScan, nullptr, x + margin, y + margin, 200, btnH, SWP_NOZORDER);
+            SetWindowPos(m_btnTracert, nullptr, x + margin + 208, y + margin, 220, btnH, SWP_NOZORDER);
             SetWindowPos(m_lvNetwork, nullptr, x + margin, y + margin * 2 + btnH,
                          w - margin * 2, h - (margin * 2 + btnH) - margin, SWP_NOZORDER);
             break;
@@ -410,15 +417,22 @@ void MainWindow::LayoutTab(int index) {
             break;
         }
         case TAB_REPORT: {
-            hideAllExcept({ m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson });
+            hideAllExcept({ m_edReport, m_btnSaveTxt, m_btnSaveHtml, m_btnSaveMd, m_btnSaveJson,
+                             m_btnOpenLastReport, m_btnOpenLastReportFolder });
             int bx = x + margin;
             const int btnW = 130, gap = 8;
             SetWindowPos(m_btnSaveTxt, nullptr, bx, y + margin, btnW, btnH, SWP_NOZORDER); bx += btnW + gap;
             SetWindowPos(m_btnSaveHtml, nullptr, bx, y + margin, btnW, btnH, SWP_NOZORDER); bx += btnW + gap;
             SetWindowPos(m_btnSaveMd, nullptr, bx, y + margin, btnW, btnH, SWP_NOZORDER); bx += btnW + gap;
             SetWindowPos(m_btnSaveJson, nullptr, bx, y + margin, btnW, btnH, SWP_NOZORDER);
-            SetWindowPos(m_edReport, nullptr, x + margin, y + margin * 2 + btnH,
-                         w - margin * 2, h - (margin * 2 + btnH) - margin, SWP_NOZORDER);
+
+            int bx2 = x + margin;
+            SetWindowPos(m_btnOpenLastReport, nullptr, bx2, y + margin * 2 + btnH, 190, btnH, SWP_NOZORDER);
+            bx2 += 198;
+            SetWindowPos(m_btnOpenLastReportFolder, nullptr, bx2, y + margin * 2 + btnH, 180, btnH, SWP_NOZORDER);
+
+            SetWindowPos(m_edReport, nullptr, x + margin, y + margin * 3 + btnH * 2,
+                         w - margin * 2, h - (margin * 3 + btnH * 2) - margin, SWP_NOZORDER);
             break;
         }
         case TAB_HELP: {
@@ -491,6 +505,7 @@ void MainWindow::OnCommand(int id, HWND) {
     switch (id) {
         case ID_BTN_FULLSCAN: StartFullScan(); break;
         case ID_BTN_NETSCAN: StartNetworkScan(); break;
+        case ID_BTN_TRACERT: StartTraceroute(); break;
         case ID_BTN_SYSSCAN: StartSystemScan(); break;
         case ID_BTN_SFC: StartSfcScan(); break;
         case ID_BTN_DISM_CHECK: StartDismCheck(); break;
@@ -501,6 +516,8 @@ void MainWindow::OnCommand(int id, HWND) {
         case ID_BTN_SAVE_HTML: SaveReport(1); break;
         case ID_BTN_SAVE_MD: SaveReport(2); break;
         case ID_BTN_SAVE_JSON: SaveReport(3); break;
+        case ID_BTN_OPEN_LAST_REPORT: OpenLastSavedReport(); break;
+        case ID_BTN_OPEN_LAST_REPORT_FOLDER: OpenLastSavedReportFolder(); break;
         case ID_BTN_OPEN_CMD:
             // Launched from an already-elevated process, so this inherits
             // elevation automatically - no separate "Run as administrator"
@@ -834,6 +851,23 @@ void MainWindow::StartSecurityScan() {
     });
 }
 
+void MainWindow::StartTraceroute() {
+    if (m_busy) return;
+    if (m_worker.joinable()) m_worker.join();
+    SetBusy(true, L"Tracing route to the internet - this can take up to a minute...");
+    m_worker = std::thread([this]() {
+        auto res = m_engine.RunTraceroute();
+        {
+            std::lock_guard<std::mutex> lock(m_resultsMutex);
+            for (auto& r : res) m_netResults.push_back(r);
+            RebuildAll(m_allResults, m_netResults, m_sysResults, m_hwResults, m_secResults);
+            m_diagnoses = RulesEngine::Analyze(m_allResults);
+        }
+        PostMessageW(m_hwnd, WM_APP_RESULTS, 0, 0);
+    });
+}
+
+
 void MainWindow::StartSfcScan() {
     if (m_busy) return;
     if (m_worker.joinable()) m_worker.join();
@@ -990,8 +1024,49 @@ void MainWindow::SaveReport(int format) {
     }
     if (path.empty()) {
         MessageBoxW(m_hwnd, L"Failed to save the report.", L"WinDiagPro", MB_OK | MB_ICONERROR);
-    } else {
-        std::wstring msg = L"Report saved to:\r\n" + path;
-        MessageBoxW(m_hwnd, msg.c_str(), L"WinDiagPro", MB_OK | MB_ICONINFORMATION);
+        return;
     }
+
+    m_lastSavedReportPath = path;
+    m_lastSavedReportFormat = format;
+
+    std::wstring msg = L"Report saved to:\r\n" + path + L"\r\n\r\nOpen it now?";
+    if (MessageBoxW(m_hwnd, msg.c_str(), L"WinDiagPro", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+        OpenReportFile(path, format);
+    }
+}
+
+void MainWindow::OpenReportFile(const std::wstring& path, int format) {
+    // .html gets its normal file association (a browser, which is what it's
+    // for). .txt/.md/.json are forced open in Notepad specifically: some
+    // systems have no default handler for .md/.json at all (which would
+    // otherwise prompt an unhelpful "how do you want to open this file?"
+    // dialog), and plain Notepad is exactly what you want anyway if you're
+    // about to copy/paste the content into an editor, browser, or AI tool.
+    bool ok = (format == 1)
+        ? LaunchExternalTool(path)
+        : LaunchExternalTool(L"notepad.exe", L"\"" + path + L"\"");
+    if (!ok) {
+        MessageBoxW(m_hwnd, L"Could not open the report file.", L"WinDiagPro", MB_OK | MB_ICONWARNING);
+    }
+}
+
+void MainWindow::OpenLastSavedReport() {
+    if (m_lastSavedReportPath.empty()) {
+        MessageBoxW(m_hwnd, L"No report has been saved yet this session. Use one of the Save buttons first.",
+                    L"WinDiagPro", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    OpenReportFile(m_lastSavedReportPath, m_lastSavedReportFormat);
+}
+
+void MainWindow::OpenLastSavedReportFolder() {
+    if (m_lastSavedReportPath.empty()) {
+        MessageBoxW(m_hwnd, L"No report has been saved yet this session. Use one of the Save buttons first.",
+                    L"WinDiagPro", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    // /select, highlights the specific file in Explorer rather than just
+    // opening its containing folder generically.
+    LaunchExternalTool(L"explorer.exe", L"/select,\"" + m_lastSavedReportPath + L"\"");
 }

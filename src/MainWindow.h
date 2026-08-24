@@ -44,6 +44,7 @@ private:
     // Long-running work, always dispatched to a background thread.
     void StartFullScan();
     void StartNetworkScan();
+    void StartTraceroute();
     void StartSystemScan();
     void StartHardwareScan();
     void StartSecurityScan();
@@ -51,6 +52,9 @@ private:
     void StartDismCheck();
     void StartDismScan();
     void SaveReport(int format); // 0=txt 1=html 2=md 3=json
+    void OpenReportFile(const std::wstring& path, int format);
+    void OpenLastSavedReport();
+    void OpenLastSavedReportFolder();
 
     void SetBusy(bool busy, const std::wstring& statusText);
 
@@ -80,8 +84,12 @@ private:
     HWND m_lvRepairCatalog = nullptr, m_edRepairLog = nullptr, m_btnRunRepair = nullptr;
     HWND m_edReport = nullptr;
     HWND m_btnSaveTxt = nullptr, m_btnSaveHtml = nullptr, m_btnSaveMd = nullptr, m_btnSaveJson = nullptr;
+    HWND m_btnOpenLastReport = nullptr, m_btnOpenLastReportFolder = nullptr;
+    std::wstring m_lastSavedReportPath;
+    int m_lastSavedReportFormat = -1;
 
     HWND m_btnFullScan = nullptr, m_btnNetScan = nullptr, m_btnSysScan = nullptr;
+    HWND m_btnTracert = nullptr;
     HWND m_btnHwScan = nullptr, m_btnSecScan = nullptr;
     HWND m_btnSfc = nullptr, m_btnDismCheck = nullptr, m_btnDismScan = nullptr;
 

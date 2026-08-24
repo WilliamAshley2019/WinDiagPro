@@ -1,15 +1,3 @@
-I was really upset with microsoft putting the windows system troubleshooters only online especially network troubleshooting tools ... which is pretty retarded to put online 
-to be clear that is no longer running locally on your computer when it has no internet access.. so the internet troubleshooting tool is only avaialable on the internet
-utterly retarded.
-
-so I wanted to make an alternative windows troubleshooter
-that will do what the old troubleshooters did and help fix issues that for whatever reason windows has decided not to let its endusers to to keep their computer working.... its absurd imho.
-
-Download the zip and run from there. 
-https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip
-
-  This version adds a graphical interface under topology as I aim to work towards the original trouble shoooter for networking issues fix.
-
 # WinDiagPro
 
 An offline-first Windows troubleshooter/diagnostic tool, built as a native
@@ -25,12 +13,17 @@ SFC, and DISM are all local OS APIs. There is no telemetry, no cloud
 reporting, and no dependency that needs to be downloaded at build or run
 time — it's a single self-contained EXE.
 
-## Quick start
-
-If you want the easiest way to try the current build, download the zip and
-run it from there:
-
-https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip
+**Nothing else needs to be installed, to build or to run this.** To build:
+Visual Studio 2026 (or 2022) with the "Desktop development with C++"
+workload — that's the Windows SDK, which is all this project uses. No
+NuGet packages, no Windows App SDK, no third-party libraries. To run: just
+the compiled EXE — it links the static C++ runtime, so it doesn't even need
+the Visual C++ Redistributable present. Everything it shells out to
+(`ipconfig`, `netsh`, `sfc`, `DISM`, `pnputil`, `w32tm`, Notepad, Device
+Manager, Event Viewer, Control Panel applets) already ships with Windows.
+The GitHub projects named later in this file (in "Repair actions inspired
+by other open-source tools") are research references only — ideas that got
+reimplemented natively in this codebase, never pulled in as dependencies.
 
 ## What changed from the original draft
 
@@ -75,6 +68,7 @@ WinDiagPro/
     ├── QuickActions.h/.cpp   # maps a failing check to a concrete fix (repair action or launched tool)
     ├── TopologyView.h/.cpp   # self-drawn (GDI) network topology diagram control
     ├── ReportGenerator.h/.cpp# builds + saves .txt / .html / .md / .json reports
+    ├── HelpContent.h         # curated offline troubleshooting reference, baked into the EXE
     ├── MainWindow.h/.cpp     # native Win32 GUI (TabControl + ListViews, copy + context menus)
     └── resource.h
 ```
@@ -128,7 +122,8 @@ CVTRES to collide over.
    automatically, and most repair actions (service restarts, Winsock/TCP-IP
    reset, SFC/DISM) need it. Windows will show the standard UAC prompt.
 
- ## Using it
+
+## Using it
 
 **GUI mode** (default — just run the EXE): a full diagnostic runs
 automatically on launch. Tabs:
@@ -143,7 +138,8 @@ automatically on launch. Tabs:
 - **Hardware** — WMI query for any device Windows currently flags with a
   Device Manager error code.
 - **Security** — Windows Firewall profile status (Domain/Private/Public),
-  Windows Defender service status.
+  Windows Defender service status, hosts file review, and browser/WinHTTP
+  proxy configuration.
 - **Topology** — an auto-refreshing visual diagram of every adapter and how
   it routes (or doesn't) to the internet - see "Multi-NIC topology diagnosis"
   below.
@@ -151,11 +147,21 @@ automatically on launch. Tabs:
   reset TCP/IP, renew DHCP, restart DHCP/DNS/NLA/Firewall services); check
   the ones you want and click **Run Checked Repairs**. A log of what
   happened appears below, and the dashboard re-scans automatically after.
+- **Help** — a curated offline troubleshooting reference compiled directly
+  into the EXE - available with zero network access. See "Keeping the
+  machine diagnosable" below.
 - **Report** — full report, with **Save as .txt / .html / .md / .json**
   buttons (saves to Documents by default). `.md` and `.json` exist
   specifically so you can hand the report to an AI assistant or paste it
   into a ticket system in a format that parses cleanly, rather than only the
-  human-oriented `.txt`/`.html` forms.
+  human-oriented `.txt`/`.html` forms. Every save now asks "open it now?" -
+  `.txt`/`.md`/`.json` open in Notepad specifically (some systems have no
+  default handler for `.md`/`.json` at all, which would otherwise prompt an
+  unhelpful "how do you want to open this?" dialog; Notepad is also exactly
+  what you want if you're about to copy/paste into an editor, browser, or AI
+  chat), while `.html` opens in your default browser. **Open Last Saved
+  Report** and **Open Containing Folder** buttons let you get back to it
+  later without re-saving.
 
 ### Copying and acting on individual results
 
@@ -195,6 +201,34 @@ WinDiagPro.exe /cli /full /html           Save as .html instead of .txt
 (CLI mode currently always saves `.txt`, or `.html` with `/html` — `.md`/`.json`
 export is GUI-only for now; shout if you want CLI flags for those too.)
 
+## Multi-NIC topology diagnosis and the Topology tab
+
+**Critical bug fix: gateway detection was silently unreliable.** Adapter
+gateway detection relied solely on `GetAdaptersAddresses`' `FirstGatewayAddress`
+field, which is a documented-in-practice unreliable Windows API quirk - it
+can come back empty for IPv4 gateways learned via plain DHCP even though the
+gateway is fully configured and working (confirmed via a real report: two
+adapters both showed `ipconfig`-visible working gateways, but WinDiagPro
+reported both as `FAIL - no default gateway configured`, cascading into a
+false "No active network connection" root-cause diagnosis on a perfectly
+healthy network). `ipconfig.exe` avoids this by not relying solely on that
+field - it effectively cross-references the actual IP routing table. Gateway
+detection now does the same: `GetIpForwardTable2` (the same API already used
+for the Active Route Selection and Manually-Configured Routes checks below)
+is the primary, authoritative source, with the adapter field kept only as a
+fallback if that somehow comes up empty too. This fix is at the data source,
+so every downstream consumer - adapter role classification, the Topology
+tab's colors, the rules-engine diagnosis - self-corrects with it.
+
+This grew out of a real multi-NIC troubleshooting case: one adapter with a
+working internet connection, a second adapter used for a direct cable link
+to another PC, and that second adapter intermittently losing its DHCP lease
+and ending up with a link-local (APIPA, `169.254.x.x`) address while still
+carrying a stale routable default gateway - an invalid combination
+(RFC 3927 says `169.254.0.0/16` must never carry a usable gateway) that
+causes exactly the "some things load, some don't" symptom that's miserable
+to chase through `ipconfig` output alone.
+
 **Adapters are now classified by role**, not just judged by "does it have an
 IP":
 
@@ -233,6 +267,62 @@ intentionally **read-only / auto-laid-out for this first version**, not an
 interactive drag-and-drop network designer - see "Ideas for next steps"
 below for that distinction.
 
+**Bug fix: selection used to revert after ~3 seconds.** The auto-refresh
+timer was unconditionally clearing which box was selected every time it
+rebuilt the diagram, so a clicked box's details would flash and then revert
+to the generic "click any box" hint - nowhere near enough time to read or
+copy anything. Selection is now tracked by the clicked node's identity
+(its title) rather than its position in the list, and re-resolved against
+the freshly-rebuilt diagram on every refresh - so the details you clicked
+for now stay on screen until you deliberately click something else.
+
+**What the gateway actually is, and its real limits.** The gateway shown
+for each adapter comes from `GetAdaptersAddresses` - it's exactly what
+Windows itself has configured (via DHCP or a static setting), nothing more.
+Concretely, this means: switches and hubs between you and that gateway are
+completely invisible (they're Layer 2 - no IP tool on any OS can see them);
+the gateway IP could be a router, an AP in router mode, or a modem, with no
+way to tell which from the LAN side alone; and carrier-grade NAT (CGNAT) -
+common on cable/mobile ISPs - happens entirely at the ISP's edge and is
+invisible to `ipconfig` by definition.
+
+**New: Trace Route to Internet** (Network tab button) actually sees past
+your own gateway. It shells out to `tracert` (walking the real path hop by
+hop toward a public IP, `-d` for speed and `-S` to force a specific source
+adapter when needed) and flags any hop that falls in `100.64.0.0/10` -
+that block is reserved (RFC 6598) exclusively for CGNAT, so seeing it on
+the path is about as close to definitive proof as you can get without
+asking your ISP directly. This is on-demand only (can take up to a minute)
+and, unlike the automatic checks, deliberately sends real packets toward
+the public internet - if the internet is down, it's still informative:
+you'll see exactly which hop the path stops at.
+
+**New: two checks that confirm rather than infer your own machine's
+routing.** The metric shown per adapter tells you which one *should* win
+for internet traffic, but that's an inference - two direct checks now
+confirm it instead:
+- **Active route selection** calls `GetBestInterfaceEx` to ask Windows
+  directly which adapter it will actually use for general internet traffic
+  right now, rather than assuming the lowest metric wins.
+- **Manually-configured routes** scans the IPv4 routing table
+  (`GetIpForwardTable2`) for any route whose `Origin` is `NlroManual` -
+  i.e. not auto-generated by DHCP/router-advertisement/normal config - since
+  a VPN client or leftover static route can silently override normal
+  adapter selection for a specific destination, in a way the metric column
+  alone won't reveal.
+
+**New: two "what's actually out there" checks**, collecting more of what
+Windows already knows rather than leaving it locked in `ipconfig`/`arp`
+output you'd have to go look up separately:
+- **Local network devices** reads the ARP/neighbor table
+  (`GetIpNetTable2`) and lists every device Windows has actually resolved a
+  MAC address for on your LAN, with which adapter saw it and whether it's
+  flagged as a router - a live inventory of what's actually reachable
+  on-link, not just your own configuration.
+- **DNS client cache** shows how many entries are currently cached (via
+  `ipconfig /displaydns`) *before* you decide to flush it - seeing what's
+  cached is more precise diagnostically than "flush it and hope."
+
 **New safety-net repair actions**, matching the "snapshot before you touch
 anything, make it reversible" discipline that a good manual troubleshooting
 session already follows:
@@ -243,27 +333,6 @@ session already follows:
 - **Backup Current Network Configuration** - snapshots `ipconfig /all`,
   `route print`, and `netsh interface ip show config` to a timestamped file,
   purely as a before/after reference.
-
-### What I deliberately did not build: raw DHCP DISCOVER/OFFER probing
-
-One idea from that troubleshooting session was sending a raw DHCP DISCOVER
-and watching for an OFFER, to know for certain whether a DHCP server is
-responding at all (the `dhcptest`-style approach). I looked at this
-seriously and decided against it for now: Windows' own DHCP Client service
-normally owns UDP port 68 system-wide, so a clean implementation needs
-either raw IP sockets (which some antivirus products flag as suspicious
-behavior - awkward for a troubleshooting tool to trigger) or temporarily
-stopping the DHCP Client service mid-test (invasive on a multi-NIC machine
-where another adapter may depend on it). I also can't validate real
-broadcast/DHCP runtime behavior in my own sandbox the way I can validate a
-compile. Given all that, the honest move was to build the safer
-alternative that's still genuinely useful (NUD gateway state + role
-classification above) and flag this one as a considered, deliberate
-deferral rather than a fragile half-implementation. Happy to build it
-carefully as a dedicated follow-up if you still want it, most likely via
-the "stop DHCP Client service, test, restart" path with very clear warnings
-around it.
-
 
 
 ## Repair actions inspired by (not copied from) other open-source tools
@@ -302,4 +371,127 @@ way:
   isn't enough for that specific failure mode.
 
 
+## Keeping the machine diagnosable and fixable with the internet down
 
+This is the actual point of the project, so it's worth calling out
+specifically what's aimed at it in this round:
+
+- **Static CRT linking.** The build now links `MultiThreaded`/
+  `MultiThreadedDebug` instead of the DLL runtime, so the compiled EXE does
+  not depend on the Visual C++ Redistributable being installed. That matters
+  a lot for a WinRE/recovery-USB scenario or a freshly-reimaged machine -
+  there's no internet to fetch the redistributable if it's missing, so the
+  tool now simply doesn't need it.
+- **Hosts file check** (Security tab) - flags any active (non-comment,
+  non-default-localhost) entry, since a hijacked or stale hosts file is a
+  classic, easy-to-miss cause of "some sites won't resolve while others
+  work fine." Right-click to open it directly in Notepad for review.
+- **Proxy checks** (Security tab) - both the WinINet proxy (browsers/most
+  apps) and the separate WinHTTP proxy (Windows Update and many background
+  services use this one specifically) are checked independently, since a
+  leftover corporate/VPN proxy in just one of the two is a very common,
+  confusing cause of "my browser works but Windows Update doesn't" or vice
+  versa. New **Reset WinHTTP Proxy** repair action to clear it.
+- **System clock / time sync check** (System tab) - a wrong system clock
+  breaks HTTPS/TLS certificate validation, which looks exactly like "the
+  internet is down" for every secure site, while having nothing to do with
+  networking at all. This is one of the most commonly missed causes because
+  of how unrelated it looks.
+- **The Help tab** - curated, original troubleshooting reference text
+  (`HelpContent.h`) compiled directly into the executable: how to read the
+  Topology tab's colors, a triage order for "internet doesn't work" that
+  rules out categories before you touch anything invasive, the
+  clock/HTTPS gotcha above, a walkthrough for a stuck Windows Update, and
+  the "snapshot before you change anything" discipline the Repair tab's
+  backup actions support. This is available with the network fully down and
+  no access to anyone's support servers - which is the entire premise of
+  replacing Microsoft's now-online-only troubleshooters.
+- **System Restore point check** (System tab) - reports whether any restore
+  points exist and when the most recent one was taken, with a **Create
+  Restore Point Now** repair action (via PowerShell's `Checkpoint-Computer`).
+  This is a whole-system undo button - registry, drivers, system files, not
+  just network settings - and it works completely offline. Worth creating
+  one before any invasive repair.
+- **Autostart entries check** (Security tab) - lists registry Run/RunOnce
+  entries (HKLM and HKCU). This directly complements the hosts-file and
+  proxy checks: a common reason a network fix "comes back" after a restart
+  is malware or a stray installer reapplying its hosts/proxy/DNS changes via
+  an autostart entry every boot. Right-click to jump to Task Manager's
+  Startup tab.
+- **Elevated Command Prompt / PowerShell buttons** (Help tab) - a safety
+  valve so a full terminal is always one click away, without needing to
+  find it through a Start menu that might itself be misbehaving. Since
+  WinDiagPro already runs elevated, the launched terminal inherits that
+  elevation automatically.
+
+## On the large tool/API reference material
+
+A lot of reference material has come up across this project - CLI tool
+lists, enterprise routing protocols, and low-level kernel/hardware APIs.
+Worth being explicit about the triage, since most of it is either already
+covered, or a deliberate no:
+
+- **Standard CLI tools** (`ping`, `tracert`, `route print`, `arp -a`,
+  `nslookup`, `netsh`, `ipconfig`, driver/service queries) - this is what
+  WinDiagPro already builds on throughout; the additions this round (local
+  device inventory, DNS cache) are exactly filling in gaps from that list.
+  `netstat`/active-connections remains a good, still-open addition (see
+  below).
+- **Enterprise routing protocols** (BGP, OSPF, EIGRP, HSRP/VRRP, spanning
+  tree, LACP) - these configure *routers and switches*, not a Windows
+  client. Out of scope for what this tool is (a client-side troubleshooter),
+  not a client-side networking gap.
+- **Raw sockets, kernel-mode packet interception (WFP/NDIS callouts), and
+  DPDK-style kernel bypass** - deliberately not going here. Setting this
+  aside for the same reason the raw DHCP DISCOVER/OFFER probe was declined
+  earlier: this class of capability (packet spoofing, promiscuous capture,
+  custom kernel drivers) is what security tooling looks like, not
+  troubleshooting tooling, and is exactly the kind of behavior that gets a
+  program flagged by antivirus - a bad trade for a tool whose whole premise
+  is being trustworthy when things are already going wrong. It's also
+  usually the wrong tool for the actual problem: none of the scenarios this
+  project has dealt with (APIPA+gateway mismatch, CGNAT, DHCP lease issues,
+  proxy/hosts misconfiguration) needed anything below the standard IP Helper
+  API layer to diagnose or fix.
+- **CPU-level intrinsics and line-rate performance tuning** (SIMD CRC32,
+  cache-line flushing, thread affinity pinning, nanosecond timing) - this is
+  datacenter/HFT-grade infrastructure tooling for diagnosing multi-gigabit
+  throughput bottlenecks. Not applicable to what this tool does; a home or
+  small-office machine's networking problems are never bottlenecked at the
+  CPU-cache level.
+
+## Ideas for next steps (not yet built)
+
+- An **interactive** version of the Topology tab - drag adapters/gateway
+  boxes, draw/edit connections by hand, and compare "what Windows is
+  actually doing" against "what you want it to do" side by side. The
+  current Topology tab is deliberately read-only/auto-laid-out; a real
+  editor is a substantially bigger UI undertaking (hit-testing for wire
+  endpoints, an undo stack, validating edits against what Windows will
+  actually accept) and worth scoping as its own project phase.
+- Raw DHCP DISCOVER/OFFER probing - see the dedicated section above on why
+  this was deliberately deferred rather than rushed.
+- CLI flags for `.md`/`.json` export (`/md`, `/json`).
+- Wire the Repair tab's "requires reboot" actions to offer an immediate
+  restart prompt.
+- A small offline knowledge-base file (JSON/INI shipped alongside the EXE)
+  so the rules engine's diagnoses — and the QuickActions mapping — can be
+  edited/extended without a rebuild.
+- A per-adapter "temporarily switch DNS to a public resolver (1.1.1.1 /
+  8.8.8.8)" repair action, for the "one DNS server is down but the network
+  is otherwise fine" case the Help tab talks about.
+- An "Active Connections" view (`netstat`-based) - what's actually connected
+  right now, useful for spotting something unexpected without needing the
+  internet to look it up.
+- Querying your router directly for its WAN-side IP via UPnP/IGD (SSDP
+  discovery + the `GetExternalIPAddress` SOAP call) - a fully local,
+  no-internet-needed way to confirm CGNAT definitively rather than infer it
+  from a traceroute hop, on routers that expose it. More involved and
+  router-firmware-dependent (many disable UPnP by default) than the
+  traceroute approach already built, so scoped as a later addition.
+- Saving the Topology diagram itself as an image file, for a printable/
+  offline-shareable reference of a specific fault condition.
+- Per-adapter MTU reporting (via `GetIpInterfaceEntry`'s `NlMtu` field,
+  already the same API pattern used for the metric field) - a mismatched
+  MTU is a real, if less common, cause of specific-site failures over
+  VPN/PPPoE connections that the current checks don't surface.

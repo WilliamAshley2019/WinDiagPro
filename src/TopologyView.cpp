@@ -73,6 +73,7 @@ std::wstring BuildAdapterDetails(const NetworkAdapterInfo& a) {
     if (!a.gatewayNudState.empty()) d += L"  -  state: " + a.gatewayNudState;
     d += L"\r\n";
     d += L"Route metric: " + std::to_wstring(a.metric) + L" (lower = more preferred)\r\n";
+    d += L"MTU: " + std::to_wstring(a.mtu) + L" bytes\r\n";
     if (!a.dnsServers.empty()) {
         d += L"DNS servers: ";
         for (size_t i = 0; i < a.dnsServers.size(); ++i) {
@@ -326,6 +327,7 @@ LRESULT CALLBACK TopoWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
                 st->selected = hit;
                 st->selectedKey = (hit >= 0) ? st->nodes[hit].title : L"";
                 InvalidateRect(hwnd, nullptr, FALSE);
+                SendMessageW(GetParent(hwnd), WM_TOPOLOGY_SELECTION_CHANGED, 0, 0);
             }
             return 0;
 
@@ -386,4 +388,15 @@ void TopologyView_SetData(HWND view, const std::vector<NetworkAdapterInfo>& adap
     RECT rc; GetClientRect(view, &rc);
     Layout(*st, rc.right - rc.left, rc.bottom - rc.top);
     InvalidateRect(view, nullptr, FALSE);
+}
+
+std::wstring TopologyView_GetSelectedAdapterName(HWND view) {
+    auto st = reinterpret_cast<TopoState*>(GetWindowLongPtrW(view, GWLP_USERDATA));
+    if (!st || st->selected < 0 || st->selected >= (int)st->nodes.size()) return L"";
+    const auto& title = st->nodes[st->selected].title;
+    if (title == L"INTERNET" || title == L"THIS PC") return L"";
+    for (auto& a : st->adapters) {
+        if (a.name == title) return a.name;
+    }
+    return L"";
 }

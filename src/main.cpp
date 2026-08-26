@@ -7,6 +7,8 @@
 //   WinDiagPro.exe /cli /system          System checks only
 //   WinDiagPro.exe /cli /report:<path>   Save the report to a specific folder
 //   WinDiagPro.exe /cli /html            Save as .html instead of .txt
+//   WinDiagPro.exe /cli /md              Save as .md instead of .txt
+//   WinDiagPro.exe /cli /json            Save as .json instead of .txt
 //
 // All of this is local-only: no argument here causes any network traffic
 // beyond the LAN-local ping/DNS checks described in DiagnosticsEngine.h.
@@ -76,9 +78,16 @@ static int RunCli(const std::vector<std::wstring>& args) {
     std::wcout << text;
 
     std::wstring folder = GetSwitchValue(args, L"/report:");
-    std::wstring saved = HasSwitch(args, L"/html")
-        ? ReportGenerator::SaveHtml(ReportGenerator::BuildHtml(all, diagnoses), folder)
-        : ReportGenerator::SaveText(text, folder);
+    std::wstring saved;
+    if (HasSwitch(args, L"/html")) {
+        saved = ReportGenerator::SaveHtml(ReportGenerator::BuildHtml(all, diagnoses), folder);
+    } else if (HasSwitch(args, L"/md")) {
+        saved = ReportGenerator::SaveMarkdown(ReportGenerator::BuildMarkdown(all, diagnoses), folder);
+    } else if (HasSwitch(args, L"/json")) {
+        saved = ReportGenerator::SaveJson(ReportGenerator::BuildJson(all, diagnoses), folder);
+    } else {
+        saved = ReportGenerator::SaveText(text, folder);
+    }
     if (!saved.empty()) {
         std::wcout << L"\r\nReport saved to: " << saved << L"\r\n";
     }

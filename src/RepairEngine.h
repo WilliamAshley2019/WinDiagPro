@@ -62,4 +62,12 @@ public:
     // enabled for at least one drive; Windows normally allows only one of
     // these every 24 hours by default.
     static bool CreateRestorePoint(std::wstring& log);
+
+    // Temporarily points one specific adapter's DNS at a public resolver
+    // (Cloudflare's 1.1.1.1 / 1.0.0.1) - a targeted test/fix for "the
+    // configured DNS server itself is down or unreachable" without touching
+    // any other adapter or the rest of the network config. Pair with
+    // RestoreAdapterDnsToDhcp to undo it.
+    static bool SetAdapterDnsToPublic(const std::wstring& adapterName, std::wstring& log);
+    static bool RestoreAdapterDnsToDhcp(const std::wstring& adapterName, std::wstring& log);
 };

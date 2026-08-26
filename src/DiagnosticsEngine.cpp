@@ -10,6 +10,8 @@
 #include <memory>
 #include <algorithm>
 #include <sstream>
+#include <map>
+#include <chrono>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -190,6 +192,16 @@ DWORD DiagnosticsEngine::GetInterfaceMetric(DWORD ifIndex) {
     return 0;
 }
 
+DWORD DiagnosticsEngine::GetInterfaceMtu(DWORD ifIndex) {
+    MIB_IPINTERFACE_ROW row{};
+    row.Family = AF_INET;
+    row.InterfaceIndex = ifIndex;
+    if (GetIpInterfaceEntry(&row) == NO_ERROR) {
+        return row.NlMtu;
+    }
+    return 0;
+}
+
 std::wstring DiagnosticsEngine::GetGatewayNudState(DWORD ifIndex, const std::wstring& gatewayIp) {
     if (gatewayIp.empty()) return L"";
 
@@ -227,6 +239,7 @@ void DiagnosticsEngine::ClassifyAdapters() {
     for (auto& a : m_adapters) {
         a.isVirtual = IsVirtualAdapterDescription(a.description) || IsVirtualAdapterDescription(a.name);
         a.metric = a.ifIndex ? GetInterfaceMetric(a.ifIndex) : 0;
+        a.mtu = a.ifIndex ? GetInterfaceMtu(a.ifIndex) : 0;
 
         bool isApipa = a.ipAddress.rfind(L"169.254.", 0) == 0;
 
@@ -385,7 +398,7 @@ std::vector<CheckResult> DiagnosticsEngine::RunNetworkChecks() {
                 r.status = DiagStatus::Pass;
                 r.severity = Severity::Low;
                 r.details = L"Connected. IP " + a.ipAddress + (a.dhcpEnabled ? L" (DHCP)" : L" (static)") +
-                             L", metric " + std::to_wstring(a.metric);
+                             L", metric " + std::to_wstring(a.metric) + L", MTU " + std::to_wstring(a.mtu);
                 if (!a.gatewayNudState.empty()) {
                     r.details += L". Gateway state: " + a.gatewayNudState;
                 }
@@ -1383,6 +1396,100 @@ std::vector<CheckResult> DiagnosticsEngine::CheckDnsCache() {
                 L"'ipconfig /displaydns' in an elevated terminal (Help tab has a quick-launch button) "
                 L"if you need to see exactly what's cached for a specific hostname before deciding "
                 L"whether to flush it.";
+    out.push_back(r);
+    return out;
+}
+
+std::vector<CheckResult> DiagnosticsEngine::RunDhcpBroadcastListener(int listenSeconds) {
+    std::vector<CheckResult> out;
+    CheckResult r;
+    r.name = L"DHCP broadcast listener (LAN-side, passive)";
+    r.category = DiagCategory::Network;
+
+    SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock == INVALID_SOCKET) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not create a UDP socket for passive listening.";
+        out.push_back(r);
+        return out;
+    }
+
+    BOOL reuse = TRUE;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(67); // DHCP server port - listening here means "what's answering as a server"
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+        int err = WSAGetLastError();
+        closesocket(sock);
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"Could not bind UDP port 67 to listen (error " + std::to_wstring(err) +
+                    L") - likely already in use by Internet Connection Sharing or a VM/container's "
+                    L"own DHCP server running on this machine, which is itself useful to know: "
+                    L"something local is already acting as a DHCP server.";
+        out.push_back(r);
+        return out;
+    }
+
+    DWORD sockTimeoutMs = 1000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&sockTimeoutMs), sizeof(sockTimeoutMs));
+
+    std::map<std::wstring, int> serversSeen; // server IP -> message count
+    auto start = std::chrono::steady_clock::now();
+    std::vector<BYTE> buf(2048);
+
+    while (std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::steady_clock::now() - start).count() < listenSeconds) {
+        sockaddr_in from{};
+        int fromLen = sizeof(from);
+        int n = recvfrom(sock, reinterpret_cast<char*>(buf.data()), (int)buf.size(), 0,
+                          reinterpret_cast<sockaddr*>(&from), &fromLen);
+        if (n <= 0) continue; // timeout (expected, keeps the loop bounded) or a benign recv error
+
+        // Minimal BOOTP/DHCP sanity check: op=2 means BOOTREPLY (a server's
+        // response), which is the only direction we care about here.
+        if (n < 240 || buf[0] != 2) continue;
+
+        char ipBuf[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &from.sin_addr, ipBuf, sizeof(ipBuf));
+        serversSeen[AnsiToWide(ipBuf, CP_ACP)]++;
+    }
+    closesocket(sock);
+
+    if (serversSeen.empty()) {
+        r.status = DiagStatus::Info;
+        r.severity = Severity::Low;
+        r.details = L"No DHCP server activity observed in " + std::to_wstring(listenSeconds) +
+                    L" second(s). This is passive - it only sees traffic that happens to occur "
+                    L"during the listen window. For a reliable result, trigger a lease request while "
+                    L"it's running (e.g. Network tab -> \"Release & renew DHCP on this adapter\", on "
+                    L"this machine or another device on the same network).";
+    } else if (serversSeen.size() == 1) {
+        r.status = DiagStatus::Pass;
+        r.severity = Severity::Low;
+        r.details = L"One DHCP server observed: " + serversSeen.begin()->first + L" (" +
+                    std::to_wstring(serversSeen.begin()->second) +
+                    L" message(s)). Consistent with a single legitimate DHCP server on this segment.";
+    } else {
+        r.status = DiagStatus::Warning;
+        r.severity = Severity::High;
+        std::wstring joined;
+        for (auto& kv : serversSeen) {
+            joined += kv.first + L" (" + std::to_wstring(kv.second) + L" msg), ";
+        }
+        r.details = std::to_wstring(serversSeen.size()) + L" DIFFERENT DHCP servers observed "
+                    L"responding on this network segment: " + joined +
+                    L"Multiple DHCP servers answering on the same LAN is the classic signature of "
+                    L"either a misconfigured second router (someone plugged in a home router with "
+                    L"DHCP still enabled) or a rogue/spoofed DHCP server.";
+        r.recommendation = L"Check \"Local network devices\" (Network tab) to match each IP to a MAC "
+                            L"address, and physically identify any unexpected router/device.";
+    }
     out.push_back(r);
     return out;
 }

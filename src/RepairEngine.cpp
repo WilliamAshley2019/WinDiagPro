@@ -274,6 +274,36 @@ bool RepairEngine::CreateRestorePoint(std::wstring& log) {
     return !looksLikeError;
 }
 
+bool RepairEngine::SetAdapterDnsToPublic(const std::wstring& adapterName, std::wstring& log) {
+    std::wstring primary = RunCommandCaptureOutput(
+        L"netsh interface ipv4 set dnsservers name=\"" + adapterName +
+        L"\" source=static address=1.1.1.1 register=primary validate=no", 15000);
+    std::wstring secondary = RunCommandCaptureOutput(
+        L"netsh interface ipv4 add dnsservers name=\"" + adapterName +
+        L"\" address=1.0.0.1 index=2 validate=no", 15000);
+    std::wstring flush = RunCommandCaptureOutput(L"ipconfig /flushdns", 10000);
+
+    log = L"Set primary DNS to 1.1.1.1:\r\n" + primary +
+          L"\r\nAdded secondary DNS 1.0.0.1:\r\n" + secondary +
+          L"\r\nFlushed DNS cache:\r\n" + flush +
+          L"\r\n\r\nThis is a TEMPORARY test/fix for this one adapter only - use "
+          L"\"Restore Adapter DNS to Automatic (DHCP)\" to undo it once you know whether it helped.";
+
+    bool looksLikeError = primary.find(L"failed") != std::wstring::npos ||
+                           primary.find(L"error") != std::wstring::npos ||
+                           primary.find(L"Error") != std::wstring::npos;
+    return !looksLikeError;
+}
+
+bool RepairEngine::RestoreAdapterDnsToDhcp(const std::wstring& adapterName, std::wstring& log) {
+    log = RunCommandCaptureOutput(
+        L"netsh interface ipv4 set dnsservers name=\"" + adapterName + L"\" source=dhcp", 15000);
+    bool looksLikeError = log.find(L"failed") != std::wstring::npos ||
+                           log.find(L"error") != std::wstring::npos ||
+                           log.find(L"Error") != std::wstring::npos;
+    return !looksLikeError;
+}
+
 std::vector<RepairAction> RepairEngine::GetCatalog() {
     std::vector<RepairAction> actions;
 

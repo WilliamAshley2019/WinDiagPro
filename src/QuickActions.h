@@ -15,6 +15,8 @@ enum class QuickActionKind {
     RepairCatalogId,  // payload = RepairEngine::GetCatalog() id (e.g. L"flush_dns")
     LaunchTool,        // payload = executable/URI, arg = optional arguments
     ReleaseRenewAdapter, // payload = adapter friendly name (e.g. L"Ethernet 2")
+    SetPublicDns,      // payload = adapter friendly name - switch that adapter to 1.1.1.1/1.0.0.1
+    RestoreDhcpDns,    // payload = adapter friendly name - undo SetPublicDns
 };
 
 struct QuickAction {

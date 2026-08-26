@@ -98,6 +98,19 @@ std::vector<QuickAction> GetQuickActionsFor(const CheckResult& r) {
                              QuickActionKind::RepairCatalogId, L"flush_dns", L"" });
         actions.push_back({ L"Restart DNS Client service",
                              QuickActionKind::RepairCatalogId, L"restart_dns_svc", L"" });
+
+        // r.name looks like "DNS server 192.168.1.1 (Ethernet 2)" - pull the
+        // adapter name out of the trailing parentheses so the public-DNS
+        // fallback can target just this one adapter.
+        size_t openParen = r.name.rfind(L'(');
+        size_t closeParen = r.name.rfind(L')');
+        if (openParen != std::wstring::npos && closeParen != std::wstring::npos && closeParen > openParen) {
+            std::wstring adapterName = r.name.substr(openParen + 1, closeParen - openParen - 1);
+            actions.push_back({ L"Temporarily switch this adapter to public DNS (1.1.1.1)",
+                                 QuickActionKind::SetPublicDns, adapterName, L"" });
+            actions.push_back({ L"Restore this adapter's DNS to Automatic (DHCP)",
+                                 QuickActionKind::RestoreDhcpDns, adapterName, L"" });
+        }
         return actions;
     }
 

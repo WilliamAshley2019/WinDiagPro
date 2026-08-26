@@ -34,6 +34,8 @@ private:
     void OnNotify(LPARAM lparam);
     void OnTabChanged();
     void RefreshTopology();
+    void OnTopologySelectionChanged();
+    void StartReverifyGateway();
     void OnResultsReady(); // marshaled from worker thread via WM_APP message
     void OnRepairLogReady();
 
@@ -45,6 +47,7 @@ private:
     void StartFullScan();
     void StartNetworkScan();
     void StartTraceroute();
+    void StartDhcpListener();
     void StartSystemScan();
     void StartHardwareScan();
     void StartSecurityScan();
@@ -79,6 +82,9 @@ private:
     HWND m_lvHardware = nullptr;
     HWND m_lvSecurity = nullptr;
     HWND m_topologyView = nullptr;
+    HWND m_btnReverifyGateway = nullptr;
+    std::wstring m_reverifyAdapterName; // adapter the Reverify button currently targets, if any
+    std::wstring m_reverifyGatewayIp;
     HWND m_edHelp = nullptr;
     HWND m_btnOpenCmd = nullptr, m_btnOpenPs = nullptr;
     HWND m_lvRepairCatalog = nullptr, m_edRepairLog = nullptr, m_btnRunRepair = nullptr;
@@ -90,6 +96,7 @@ private:
 
     HWND m_btnFullScan = nullptr, m_btnNetScan = nullptr, m_btnSysScan = nullptr;
     HWND m_btnTracert = nullptr;
+    HWND m_btnDhcpListen = nullptr;
     HWND m_btnHwScan = nullptr, m_btnSecScan = nullptr;
     HWND m_btnSfc = nullptr, m_btnDismCheck = nullptr, m_btnDismScan = nullptr;
 
@@ -101,6 +108,7 @@ private:
     std::vector<Diagnosis> m_diagnoses;
     std::mutex m_resultsMutex;
     std::wstring m_pendingRepairLog; // set by RunRepairAction before dispatching to worker thread
+    bool m_pendingRebootNeeded = false; // set if any just-run repair action's requiresReboot was true
 
     // UI-thread-only copies of what's currently displayed in each list view,
     // in the same order as the rows - lets the right-click handler map a

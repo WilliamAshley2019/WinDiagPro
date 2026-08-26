@@ -42,6 +42,8 @@ struct NetworkAdapterInfo {
     AdapterRole role = AdapterRole::Disconnected;
     bool isVirtual = false;
     DWORD metric = 0;              // interface metric (lower = more preferred for the default route)
+    DWORD mtu = 0;                  // interface MTU in bytes - a mismatch here is a real (if less
+                                     // common) cause of specific-site failures over VPN/PPPoE links
     std::wstring gatewayNudState;  // Neighbor Unreachability Detection state for the
                                     // gateway's ARP entry: Reachable/Probe/Stale/
                                     // Unreachable/etc - "Probe" here is exactly the
@@ -74,6 +76,28 @@ public:
     std::vector<NetworkAdapterInfo> GetAdapterTopology();
 
     std::vector<NetworkAdapterInfo> GetAdapters() const { return m_adapters; }
+
+    // Sends a single ping to a specific address. Used by the Topology tab's
+    // "Reverify Gateway" button: a successful reply is exactly what makes
+    // Windows' IP stack re-confirm a neighbor's reachability (per the
+    // standard Neighbor Unreachability Detection state machine), moving it
+    // from Stale/Probe back toward Reachable - this is a completely
+    // ordinary mechanism, not a special API.
+    bool PingAddress(const std::wstring& ip) { return PingHost(ip, 2000); }
+
+    // Passively listens for DHCP server traffic (BOOTREPLY messages) already
+    // occurring on the local network segment, for 'listenSeconds'. This is
+    // deliberately NOT a raw-socket/packet-injection design: it's an
+    // ordinary bound UDP socket (SOCK_DGRAM) on port 67, doing nothing a
+    // normal application couldn't already do - no promiscuous mode, no
+    // custom packet construction, no third-party capture library. It can
+    // only see what's already on the wire, so absence of a result doesn't
+    // prove absence of a server - trigger real traffic during the listen
+    // window (e.g. "Release & renew DHCP on this adapter") for a reliable
+    // read. Seeing MORE THAN ONE distinct server is the actual point: that's
+    // the standard signature of a rogue/duplicate DHCP server on the LAN.
+    // On-demand only - not part of the automatic scans.
+    static std::vector<CheckResult> RunDhcpBroadcastListener(int listenSeconds = 12);
 
     // Runs tracert toward 'target' to reveal the path BEYOND the local
     // default gateway - switches/hubs are invisible (they're Layer 2, no IP
@@ -118,6 +142,7 @@ private:
     bool CanResolve(const std::wstring& hostname);
     static bool IsVirtualAdapterDescription(const std::wstring& desc);
     static DWORD GetInterfaceMetric(DWORD ifIndex);
+    static DWORD GetInterfaceMtu(DWORD ifIndex);
     static std::wstring GetGatewayNudState(DWORD ifIndex, const std::wstring& gatewayIp);
 
     // These three specifically target "the network/internet looks fine but

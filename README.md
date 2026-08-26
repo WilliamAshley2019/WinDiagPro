@@ -1,10 +1,3 @@
-I was really upset with microsoft putting the windows system troubleshooters only online especially network troubleshooting tools ... which is pretty retarded to put online to be clear that is no longer running locally on your computer when it has no internet access.. so the internet troubleshooting tool is only avaialable on the internet utterly retarded.
-
-so I wanted to make an alternative windows troubleshooter that will do what the old troubleshooters did and help fix issues that for whatever reason windows has decided not to let its endusers to to keep their computer working.... its absurd imho.
-
-Download the zip and run from there. https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip
-Be sure to download and extract the entire package as the application may not execute as a standalone exe.
-I will potentially be adding some probing capabilities that may trigger windows due to possible malicious usages of some of the functions that I may use for diagnostic purpses particularly dhcp probing, I need to test this, and it may show up on your system based on your system setting - this is expected behavior if it does occur as I'm not 100% sure how much diagnostic information and packet access via windows ports can be done without creating suspicion on windows internal system ports being used maliciously. There is nothing malicious with it, the plan is to sniff and listen to all dhcp traffic on the network and compare that to the actual settings then attempt to validate the traffic to determine if there are malicious or disrupting dhcp activities on the network. The plan was to leave these tools on the intranet side of the network, rather than usage to resolve the internet side.  These comparison tools may be able to validate and provide more points of reference that may offset or determine issues that exist due to one of the data resolvers being corrupted - such that secondary system may show the mismatch that wouldn't be detected if only one tool was used that was compramised or corrupted. The last resort is to bundle third party tools that are already signed to run those functions. My understanding is these methods are more common at the datacenter level but not common in household windows installs and windows intentionally tries to control specific types of traffic that intersect with windows kernel itself to prevent user access to the os kernel systems such as through packet spoofing and to prevent that they flag those methods as "malicous" even if they are system admin generated and intentional. I am not entirely sure how much can be done or what can be done to bypass like if bundling in nsudo like functionality to be nt authority sys will be enough command level to do this, however I will likely experiement with this a little so you may see some weird stuff show up over the next few versions.
 # WinDiagPro
 
 An offline-first Windows troubleshooter/diagnostic tool, built as a native
@@ -33,10 +26,8 @@ by other open-source tools") are research references only — ideas that got
 reimplemented natively in this codebase, never pulled in as dependencies.
 
 ## What changed from the original draft
-
-The original draft (WinDiag / WinDiagApp) mixed in three things that don't
-fit an offline standalone tool, and I removed them:
-
+Scaled back so everything is native windows or in the build no need to bundle
+other tools.
 - **WinUI 3 / XAML GUI** — requires the Windows App SDK runtime and a
   packaging/MSIX story to distribute. Replaced with a plain Win32 GUI
   (TabControl + ListViews + native controls) that compiles with nothing
@@ -129,6 +120,7 @@ CVTRES to collide over.
    automatically, and most repair actions (service restarts, Winsock/TCP-IP
    reset, SFC/DISM) need it. Windows will show the standard UAC prompt.
 
+ 
 
 ## Using it
 
@@ -227,14 +219,6 @@ fallback if that somehow comes up empty too. This fix is at the data source,
 so every downstream consumer - adapter role classification, the Topology
 tab's colors, the rules-engine diagnosis - self-corrects with it.
 
-This grew out of a real multi-NIC troubleshooting case: one adapter with a
-working internet connection, a second adapter used for a direct cable link
-to another PC, and that second adapter intermittently losing its DHCP lease
-and ending up with a link-local (APIPA, `169.254.x.x`) address while still
-carrying a stale routable default gateway - an invalid combination
-(RFC 3927 says `169.254.0.0/16` must never carry a usable gateway) that
-causes exactly the "some things load, some don't" symptom that's miserable
-to chase through `ipconfig` output alone.
 
 **Adapters are now classified by role**, not just judged by "does it have an
 IP":
@@ -282,6 +266,16 @@ copy anything. Selection is now tracked by the clicked node's identity
 (its title) rather than its position in the list, and re-resolved against
 the freshly-rebuilt diagram on every refresh - so the details you clicked
 for now stay on screen until you deliberately click something else.
+
+**New: Reverify Gateway button.** Select any adapter with a configured
+gateway and a "Reverify Gateway (adapter name - state)" button appears above
+the diagram. Clicking it sends a single ping to that gateway - which is
+exactly the standard mechanism that makes Windows' IP stack re-confirm a
+neighbor's reachability (per the Neighbor Unreachability Detection state
+machine), moving it from `Stale`/`Probe` back toward `Reachable` if the
+gateway actually responds. This is a completely ordinary ping, not a
+special API - but it's the direct, one-click "try to fix this specific
+imperfect state" action that a `Stale`/`Probe` reading calls for.
 
 **What the gateway actually is, and its real limits.** The gateway shown
 for each adapter comes from `GetAdaptersAddresses` - it's exactly what
@@ -340,6 +334,27 @@ session already follows:
 - **Backup Current Network Configuration** - snapshots `ipconfig /all`,
   `route print`, and `netsh interface ip show config` to a timestamped file,
   purely as a before/after reference.
+
+### What I deliberately did not build: raw DHCP DISCOVER/OFFER probing
+
+One idea from that troubleshooting session was sending a raw DHCP DISCOVER
+and watching for an OFFER, to know for certain whether a DHCP server is
+responding at all (the `dhcptest`-style approach). I looked at this
+seriously and decided against it for now: Windows' own DHCP Client service
+normally owns UDP port 68 system-wide, so a clean implementation needs
+either raw IP sockets (which some antivirus products flag as suspicious
+behavior - awkward for a troubleshooting tool to trigger) or temporarily
+stopping the DHCP Client service mid-test (invasive on a multi-NIC machine
+where another adapter may depend on it). I also can't validate real
+broadcast/DHCP runtime behavior in my own sandbox the way I can validate a
+compile. Given all that, the honest move was to build the safer
+alternative that's still genuinely useful (NUD gateway state + role
+classification above) and flag this one as a considered, deliberate
+deferral rather than a fragile half-implementation. Happy to build it
+carefully as a dedicated follow-up if you still want it, most likely via
+the "stop DHCP Client service, test, restart" path with very clear warnings
+around it.
+
 
 
 ## Repair actions inspired by (not copied from) other open-source tools
@@ -431,6 +446,59 @@ specifically what's aimed at it in this round:
   WinDiagPro already runs elevated, the launched terminal inherits that
   elevation automatically.
 
+## The DHCP probe question, resolved
+
+This came up more than once, so here's where it landed for good.
+
+**What was proposed:** a raw-packet DHCPDISCOVER/OFFER probe, either via
+Windows raw sockets or by bundling NPcap (the packet-capture library behind
+Wireshark/Nmap) with hand-built DHCP packet bytes.
+
+**Why that specific approach is still a no**, beyond the AV-heuristic point
+made earlier: NPcap's license is not simply "free to bundle." The plain
+Npcap installer is licensed for personal/non-commercial use; redistributing
+or silently bundling it with another application requires a separate
+**Npcap OEM license** from the Nmap Project - that's a real legal
+requirement, not a vague "gray area." Combined with WinPcap being
+deprecated/unmaintained (a security liability to depend on), and requiring
+a third-party install either way, this would also compromise the
+single-EXE, no-install design this whole project is built around.
+
+  *active* probing such as  inject a DHCPDISCOVER and wait for a reply
+  needs raw sockets or packet injection. detection only requires *listening* to traffic
+that's already there. **DHCP broadcast listener** (Network tab) does
+exactly that: an ordinary `SOCK_DGRAM` UDP socket bound to port 67, using
+nothing an ordinary application couldn't already do - no raw sockets, no
+promiscuous mode, no third-party library, no touching Windows' own DHCP
+Client service. It passively watches for BOOTREPLY traffic for ~12 seconds
+and reports what it sees:
+- **One DHCP server observed** → normal, healthy signal.
+- **Zero observed** → inconclusive by design (it's passive - trigger a
+  lease request during the window, e.g. via "Release & renew DHCP on this
+  adapter," for a reliable read).
+- **More than one distinct server observed** → flagged as a real finding:
+  multiple DHCP servers answering on the same segment is the textbook
+  signature of either a misconfigured second router or a rogue/spoofed
+  DHCP server - exactly the security-relevant detection you were actually
+  after, arrived at from the defensive/passive side rather than the
+  active-injection side.
+
+It says if  *anything* is offering DHCP on that link at all
+(useful independent of whatever Windows' own client reports), without any
+of the risk or dependency baggage of the raw-injection route.
+
+**What this still doesn't do:** it can't force an on-demand "is a server
+there right now" test the instant you ask, the way an active DISCOVER
+would - it only sees what's already flowing during the window. Getting
+that immediacy back would mean binding port 68 to send a DISCOVER
+ourselves, which runs into the exact conflict with Windows' own DHCP
+Client service noted earlier (only one thing can own that port at a time).
+If you want that specific capability after testing the passive listener,
+the honest path is a "temporarily stop DHCP Client, probe, restart it"
+flow - invasive enough that it should be opt-in with a clear warning, not
+automatic, and I'd rather build that deliberately if it turns out you still
+need it than bundle it in preemptively.
+
 ## On the large tool/API reference material
 
 A lot of reference material has come up across this project - CLI tool
@@ -476,17 +544,14 @@ covered, or a deliberate no:
   editor is a substantially bigger UI undertaking (hit-testing for wire
   endpoints, an undo stack, validating edits against what Windows will
   actually accept) and worth scoping as its own project phase.
-- Raw DHCP DISCOVER/OFFER probing - see the dedicated section above on why
-  this was deliberately deferred rather than rushed.
-- CLI flags for `.md`/`.json` export (`/md`, `/json`).
-- Wire the Repair tab's "requires reboot" actions to offer an immediate
-  restart prompt.
+- An active on-demand DHCP probe (send a DISCOVER, not just passively
+  listen) - see "The DHCP probe question, resolved" above for why the
+  passive listener was built first, and what an active version would need
+  (temporarily stopping the DHCP Client service, opt-in with a clear
+  warning).
 - A small offline knowledge-base file (JSON/INI shipped alongside the EXE)
   so the rules engine's diagnoses — and the QuickActions mapping — can be
   edited/extended without a rebuild.
-- A per-adapter "temporarily switch DNS to a public resolver (1.1.1.1 /
-  8.8.8.8)" repair action, for the "one DNS server is down but the network
-  is otherwise fine" case the Help tab talks about.
 - An "Active Connections" view (`netstat`-based) - what's actually connected
   right now, useful for spotting something unexpected without needing the
   internet to look it up.
@@ -498,7 +563,4 @@ covered, or a deliberate no:
   traceroute approach already built, so scoped as a later addition.
 - Saving the Topology diagram itself as an image file, for a printable/
   offline-shareable reference of a specific fault condition.
-- Per-adapter MTU reporting (via `GetIpInterfaceEntry`'s `NlMtu` field,
-  already the same API pattern used for the metric field) - a mismatched
-  MTU is a real, if less common, cause of specific-site failures over
-  VPN/PPPoE connections that the current checks don't surface.
+

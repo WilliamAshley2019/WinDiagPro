@@ -1,3 +1,9 @@
+I was really upset with microsoft putting the windows system troubleshooters only online especially network troubleshooting tools ... which is pretty retarded to put online to be clear that is no longer running locally on your computer when it has no internet access.. so the internet troubleshooting tool is only avaialable on the internet utterly retarded.
+
+so I wanted to make an alternative windows troubleshooter that will do what the old troubleshooters did and help fix issues that for whatever reason windows has decided not to let its endusers to to keep their computer working.... its absurd imho.
+
+Download the zip and run from there. https://github.com/WilliamAshley2019/WinDiagPro/archive/refs/heads/main.zip Be sure to download and extract the entire package as the application may not execute as a standalone exe. I will potentially be adding some probing capabilities that may trigger windows due to possible malicious usages of some of the functions that I may use for diagnostic purpses particularly dhcp probing, I need to test this, and it may show up on your system based on your system setting - this is expected behavior if it does occur as I'm not 100% sure how much diagnostic information and packet access via windows ports can be done without creating suspicion on windows internal system ports being used maliciously. There is nothing malicious with it, the plan is to sniff and listen to all dhcp traffic on the network and compare that to the actual settings then attempt to validate the traffic to determine if there are malicious or disrupting dhcp activities on the network. The plan was to leave these tools on the intranet side of the network, rather than usage to resolve the internet side. These comparison tools may be able to validate and provide more points of reference that may offset or determine issues that exist due to one of the data resolvers being corrupted - such that secondary system may show the mismatch that wouldn't be detected if only one tool was used that was compramised or corrupted. The last resort is to bundle third party tools that are already signed to run those functions. My understanding is these methods are more common at the datacenter level but not common in household windows installs and windows intentionally tries to control specific types of traffic that intersect with windows kernel itself to prevent user access to the os kernel systems such as through packet spoofing and to prevent that they flag those methods as "malicous" even if they are system admin generated and intentional. I am not entirely sure how much can be done or what can be done to bypass like if bundling in nsudo like functionality to be nt authority sys will be enough command level to do this, however I will likely experiement with this a little so you may see some weird stuff show up over the next few versions.
+
 # WinDiagPro
 
 An offline-first Windows troubleshooter/diagnostic tool, built as a native
@@ -335,27 +341,6 @@ session already follows:
   `route print`, and `netsh interface ip show config` to a timestamped file,
   purely as a before/after reference.
 
-### What I deliberately did not build: raw DHCP DISCOVER/OFFER probing
-
-One idea from that troubleshooting session was sending a raw DHCP DISCOVER
-and watching for an OFFER, to know for certain whether a DHCP server is
-responding at all (the `dhcptest`-style approach). I looked at this
-seriously and decided against it for now: Windows' own DHCP Client service
-normally owns UDP port 68 system-wide, so a clean implementation needs
-either raw IP sockets (which some antivirus products flag as suspicious
-behavior - awkward for a troubleshooting tool to trigger) or temporarily
-stopping the DHCP Client service mid-test (invasive on a multi-NIC machine
-where another adapter may depend on it). I also can't validate real
-broadcast/DHCP runtime behavior in my own sandbox the way I can validate a
-compile. Given all that, the honest move was to build the safer
-alternative that's still genuinely useful (NUD gateway state + role
-classification above) and flag this one as a considered, deliberate
-deferral rather than a fragile half-implementation. Happy to build it
-carefully as a dedicated follow-up if you still want it, most likely via
-the "stop DHCP Client service, test, restart" path with very clear warnings
-around it.
-
-
 
 ## Repair actions inspired by (not copied from) other open-source tools
 
@@ -446,121 +431,4 @@ specifically what's aimed at it in this round:
   WinDiagPro already runs elevated, the launched terminal inherits that
   elevation automatically.
 
-## The DHCP probe question, resolved
-
-This came up more than once, so here's where it landed for good.
-
-**What was proposed:** a raw-packet DHCPDISCOVER/OFFER probe, either via
-Windows raw sockets or by bundling NPcap (the packet-capture library behind
-Wireshark/Nmap) with hand-built DHCP packet bytes.
-
-**Why that specific approach is still a no**, beyond the AV-heuristic point
-made earlier: NPcap's license is not simply "free to bundle." The plain
-Npcap installer is licensed for personal/non-commercial use; redistributing
-or silently bundling it with another application requires a separate
-**Npcap OEM license** from the Nmap Project - that's a real legal
-requirement, not a vague "gray area." Combined with WinPcap being
-deprecated/unmaintained (a security liability to depend on), and requiring
-a third-party install either way, this would also compromise the
-single-EXE, no-install design this whole project is built around.
-
-  *active* probing such as  inject a DHCPDISCOVER and wait for a reply
-  needs raw sockets or packet injection. detection only requires *listening* to traffic
-that's already there. **DHCP broadcast listener** (Network tab) does
-exactly that: an ordinary `SOCK_DGRAM` UDP socket bound to port 67, using
-nothing an ordinary application couldn't already do - no raw sockets, no
-promiscuous mode, no third-party library, no touching Windows' own DHCP
-Client service. It passively watches for BOOTREPLY traffic for ~12 seconds
-and reports what it sees:
-- **One DHCP server observed** → normal, healthy signal.
-- **Zero observed** → inconclusive by design (it's passive - trigger a
-  lease request during the window, e.g. via "Release & renew DHCP on this
-  adapter," for a reliable read).
-- **More than one distinct server observed** → flagged as a real finding:
-  multiple DHCP servers answering on the same segment is the textbook
-  signature of either a misconfigured second router or a rogue/spoofed
-  DHCP server - exactly the security-relevant detection you were actually
-  after, arrived at from the defensive/passive side rather than the
-  active-injection side.
-
-It says if  *anything* is offering DHCP on that link at all
-(useful independent of whatever Windows' own client reports), without any
-of the risk or dependency baggage of the raw-injection route.
-
-**What this still doesn't do:** it can't force an on-demand "is a server
-there right now" test the instant you ask, the way an active DISCOVER
-would - it only sees what's already flowing during the window. Getting
-that immediacy back would mean binding port 68 to send a DISCOVER
-ourselves, which runs into the exact conflict with Windows' own DHCP
-Client service noted earlier (only one thing can own that port at a time).
-If you want that specific capability after testing the passive listener,
-the honest path is a "temporarily stop DHCP Client, probe, restart it"
-flow - invasive enough that it should be opt-in with a clear warning, not
-automatic, and I'd rather build that deliberately if it turns out you still
-need it than bundle it in preemptively.
-
-## On the large tool/API reference material
-
-A lot of reference material has come up across this project - CLI tool
-lists, enterprise routing protocols, and low-level kernel/hardware APIs.
-Worth being explicit about the triage, since most of it is either already
-covered, or a deliberate no:
-
-- **Standard CLI tools** (`ping`, `tracert`, `route print`, `arp -a`,
-  `nslookup`, `netsh`, `ipconfig`, driver/service queries) - this is what
-  WinDiagPro already builds on throughout; the additions this round (local
-  device inventory, DNS cache) are exactly filling in gaps from that list.
-  `netstat`/active-connections remains a good, still-open addition (see
-  below).
-- **Enterprise routing protocols** (BGP, OSPF, EIGRP, HSRP/VRRP, spanning
-  tree, LACP) - these configure *routers and switches*, not a Windows
-  client. Out of scope for what this tool is (a client-side troubleshooter),
-  not a client-side networking gap.
-- **Raw sockets, kernel-mode packet interception (WFP/NDIS callouts), and
-  DPDK-style kernel bypass** - deliberately not going here. Setting this
-  aside for the same reason the raw DHCP DISCOVER/OFFER probe was declined
-  earlier: this class of capability (packet spoofing, promiscuous capture,
-  custom kernel drivers) is what security tooling looks like, not
-  troubleshooting tooling, and is exactly the kind of behavior that gets a
-  program flagged by antivirus - a bad trade for a tool whose whole premise
-  is being trustworthy when things are already going wrong. It's also
-  usually the wrong tool for the actual problem: none of the scenarios this
-  project has dealt with (APIPA+gateway mismatch, CGNAT, DHCP lease issues,
-  proxy/hosts misconfiguration) needed anything below the standard IP Helper
-  API layer to diagnose or fix.
-- **CPU-level intrinsics and line-rate performance tuning** (SIMD CRC32,
-  cache-line flushing, thread affinity pinning, nanosecond timing) - this is
-  datacenter/HFT-grade infrastructure tooling for diagnosing multi-gigabit
-  throughput bottlenecks. Not applicable to what this tool does; a home or
-  small-office machine's networking problems are never bottlenecked at the
-  CPU-cache level.
-
-## Ideas for next steps (not yet built)
-
-- An **interactive** version of the Topology tab - drag adapters/gateway
-  boxes, draw/edit connections by hand, and compare "what Windows is
-  actually doing" against "what you want it to do" side by side. The
-  current Topology tab is deliberately read-only/auto-laid-out; a real
-  editor is a substantially bigger UI undertaking (hit-testing for wire
-  endpoints, an undo stack, validating edits against what Windows will
-  actually accept) and worth scoping as its own project phase.
-- An active on-demand DHCP probe (send a DISCOVER, not just passively
-  listen) - see "The DHCP probe question, resolved" above for why the
-  passive listener was built first, and what an active version would need
-  (temporarily stopping the DHCP Client service, opt-in with a clear
-  warning).
-- A small offline knowledge-base file (JSON/INI shipped alongside the EXE)
-  so the rules engine's diagnoses — and the QuickActions mapping — can be
-  edited/extended without a rebuild.
-- An "Active Connections" view (`netstat`-based) - what's actually connected
-  right now, useful for spotting something unexpected without needing the
-  internet to look it up.
-- Querying your router directly for its WAN-side IP via UPnP/IGD (SSDP
-  discovery + the `GetExternalIPAddress` SOAP call) - a fully local,
-  no-internet-needed way to confirm CGNAT definitively rather than infer it
-  from a traceroute hop, on routers that expose it. More involved and
-  router-firmware-dependent (many disable UPnP by default) than the
-  traceroute approach already built, so scoped as a later addition.
-- Saving the Topology diagram itself as an image file, for a printable/
-  offline-shareable reference of a specific fault condition.
 

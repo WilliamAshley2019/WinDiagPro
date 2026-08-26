@@ -341,27 +341,6 @@ session already follows:
   `route print`, and `netsh interface ip show config` to a timestamped file,
   purely as a before/after reference.
 
-### What I deliberately did not build: raw DHCP DISCOVER/OFFER probing
-
-One idea from that troubleshooting session was sending a raw DHCP DISCOVER
-and watching for an OFFER, to know for certain whether a DHCP server is
-responding at all (the `dhcptest`-style approach). I looked at this
-seriously and decided against it for now: Windows' own DHCP Client service
-normally owns UDP port 68 system-wide, so a clean implementation needs
-either raw IP sockets (which some antivirus products flag as suspicious
-behavior - awkward for a troubleshooting tool to trigger) or temporarily
-stopping the DHCP Client service mid-test (invasive on a multi-NIC machine
-where another adapter may depend on it). I also can't validate real
-broadcast/DHCP runtime behavior in my own sandbox the way I can validate a
-compile. Given all that, the honest move was to build the safer
-alternative that's still genuinely useful (NUD gateway state + role
-classification above) and flag this one as a considered, deliberate
-deferral rather than a fragile half-implementation. Happy to build it
-carefully as a dedicated follow-up if you still want it, most likely via
-the "stop DHCP Client service, test, restart" path with very clear warnings
-around it.
-
-
 
 ## Repair actions inspired by (not copied from) other open-source tools
 
